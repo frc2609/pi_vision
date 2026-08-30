@@ -339,6 +339,20 @@ class TestCalibrationCheck(unittest.TestCase):
         r = checks.calibration({}, self.CAM, {"calibration": {"path": "x.json", "fx": 400.0}})
         self.assertEqual(r["status"], checks.FAIL)
 
+    def test_missing_calibration_fails_rather_than_skipping(self):
+        # SKIP publishes green, so an uncalibrated camera would show a
+        # reassuring dashboard light while having no calibration at all.
+        r = checks.calibration({}, {"name": "rear"},
+                               {"calibration": {"path": None, "error": "not configured"}})
+        self.assertEqual(r["status"], checks.FAIL)
+        self.assertIn("calibrate it", r["detail"])
+
+    def test_bring_up_escape_hatch(self):
+        cam = {"name": "rear", "calibration": {"required": False}}
+        r = checks.calibration({}, cam,
+                               {"calibration": {"path": None, "error": "not configured"}})
+        self.assertEqual(r["status"], checks.SKIP)
+
 
 if __name__ == "__main__":
     unittest.main()

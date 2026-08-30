@@ -89,7 +89,10 @@ Exit code is the number of failed checks.
 | `photonvision` | Service state only. Says nothing about whether detection works — that is `vd nt`. |
 | `networktables` | Connects and checks something is actually updating. |
 
-**`SKIP` is never a failure.** It means the check could not run, and says why.
+**`SKIP` means the check could not run**, and says why. It is not a soft
+failure — and since a SKIP publishes green to the dashboard, anything the system
+is actually *missing* fails instead. An uncalibrated camera is a FAIL, not a
+skip; use `calibration.required: false` on a camera you are still bringing up.
 
 ### Publishing a go/no-go to the driver station
 

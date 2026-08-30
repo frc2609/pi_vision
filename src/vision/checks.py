@@ -1,8 +1,13 @@
 """Preflight checks. Each reads the facts and returns a finding.
 
-A finding is `{status, camera, name, detail}`. Statuses are PASS, FAIL and SKIP,
-and **SKIP is never a failure** - it means the check could not run, and it says
-why. `camera` is None for checks that are not about a particular camera.
+A finding is `{status, camera, name, detail}`. `camera` is None for checks that
+are not about a particular camera.
+
+**SKIP means the check could not run**, and it says why. It is not a soft
+failure, and the distinction matters because SKIP publishes green to the
+dashboard: something the system is *missing* has to FAIL, or an uncalibrated
+camera shows a reassuring light. "Could not check" and "checked, and it is
+absent" are different answers.
 
 Checks take facts rather than probing the system themselves, so a preflight
 costs one pass over the hardware per camera and each check stays readable.
@@ -149,11 +154,26 @@ def identity(cfg, cam, f):
 
 
 def calibration(cfg, cam, f):
+    """A configured camera with no calibration is not ready - it FAILS.
+
+    An earlier version made "not configured" a SKIP, which publishes green: an
+    uncalibrated camera showed two reassuring lights on the dashboard. A check
+    that cannot run is a SKIP; a camera that is missing something it needs is a
+    failure. Set `calibration.required: false` while bringing one up.
+    """
     name = cam["name"]
     c = f.get("calibration") or {}
+    required = cam.get("calibration", {}).get("required", True)
     if not c.get("path"):
-        return finding(SKIP if c.get("error") == "not configured" else FAIL,
-                       "calibration", c.get("error", "not found"), name)
+        if not required:
+            return finding(SKIP, "calibration",
+                           "%s (calibration.required is false)"
+                           % c.get("error", "not found"), name)
+        if c.get("error") == "not configured":
+            return finding(FAIL, "calibration",
+                           "no calibration - calibrate it in PhotonVision, then "
+                           "set calibration.file", name)
+        return finding(FAIL, "calibration", c.get("error", "not found"), name)
     fx = c.get("fx")
     if fx is None:
         return finding(FAIL, "calibration", "no intrinsics in %s" % c["path"], name)
@@ -187,7 +207,9 @@ def calibration_resolution(cfg, cam, f):
     c = f.get("calibration") or {}
     size, asked = c.get("image_size"), f.get("asked")
     if not c.get("path"):
-        return finding(SKIP, "calibration_res", "no calibration to check", name)
+        # The calibration check already reports this as a failure; repeating it
+        # here would just double-count one problem.
+        return finding(SKIP, "calibration_res", "no calibration - see above", name)
     if not size:
         return finding(SKIP, "calibration_res", "calibration records no image size", name)
     if not asked:

@@ -83,7 +83,7 @@ Exit code is the number of failed checks.
 | Check | Reading it |
 |---|---|
 | `power` | Anything but `0x0` means undervoltage or throttling occurred **since the last full power cycle**. Sticky bits do not clear on a soft reboot, so a fault here may be history rather than now — the monitor's `*_since_start` fields separate those. |
-| `camera` | Negotiated format against `camera.expect`. A mismatch usually means something reopened the camera at its own default. |
+| `format` | Negotiated width, height and pixel format against `expect`. A mismatch usually means something reopened the camera at its own default — PhotonVision opens new cameras at 320x240 YUYV. |
 | `controls` | **Expected to fail while PhotonVision is running.** It sets its own exposure when it opens the camera, and it wins. Informational unless PhotonVision is stopped. |
 | `calibration` | Derives HFOV from `fx`. A negative or zero `fx` is a diverged solve, not a bad calibration — see [photonvision_calibration.md](../../docs/photonvision_calibration.md). |
 | `photonvision` | Service state only. Says nothing about whether detection works — that is `vd nt`. |
@@ -109,7 +109,7 @@ needs no parsing:
 |---|---|
 | `ready` | the go/no-go light — every check on every camera |
 | `power_ok`, `photonvision_ok`, `networktables_ok`, `configured_ok`, `distinct_devices_ok` | machine-wide checks |
-| `<camera>/camera_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera — **always all six**, whatever state the camera is in |
+| `<camera>/format_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera — **always all six**, whatever state the camera is in |
 | `failed`, `skipped`, `cameras` | counts |
 | `seq` | increments every run |
 | `run_epoch_s` | when it last ran |

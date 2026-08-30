@@ -361,7 +361,7 @@ class TestUniformChecks(unittest.TestCase):
     here are deliberately in different states.
     """
 
-    EXPECTED = {"camera", "identity", "calibration",
+    EXPECTED = {"format", "identity", "calibration",
                 "publishing", "pipeline_fps", "detections"}
 
     def rows_for(self, published, topics):

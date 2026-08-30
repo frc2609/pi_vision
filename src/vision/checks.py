@@ -90,19 +90,26 @@ def unique_devices(cfg, cameras):
 # --- per camera -----------------------------------------------------------
 
 def camera_format(cfg, cam, f):
+    """Is the camera delivering the format we asked for?
+
+    Named `format` rather than `camera`, because every check in a camera's
+    column is "about the camera" - this is the one comparing the negotiated
+    width, height and pixel format against config. It is what caught
+    PhotonVision silently opening a camera at 320x240 YUYV, twice.
+    """
     name = cam["name"]
     if not f.get("asked"):
-        return finding(FAIL, "camera", "no device, or format unreadable, at %s"
+        return finding(FAIL, "format", "no device, or format unreadable, at %s"
                        % f["device"], name)
     exp = cam.get("expect", {})
     want = (exp.get("width"), exp.get("height"), exp.get("fourcc"))
     got = (f["asked"]["width"], f["asked"]["height"], f["asked"]["fourcc"])
     if None in want:
-        return finding(SKIP, "camera", "no expected format in config", name)
+        return finding(SKIP, "format", "no expected format in config", name)
     if got != tuple(want):
-        return finding(FAIL, "camera", "running %dx%d %s, expected %dx%d %s"
+        return finding(FAIL, "format", "running %dx%d %s, expected %dx%d %s"
                        % (got + tuple(want)), name)
-    return finding(PASS, "camera", "%dx%d %s" % got, name)
+    return finding(PASS, "format", "%dx%d %s" % got, name)
 
 
 def identity(cfg, cam, f):

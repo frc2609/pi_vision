@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# The venv exists only for pyntcore - see requirements.txt
+.venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

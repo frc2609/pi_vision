@@ -1,0 +1,80 @@
+# Camera-side configuration.
+#
+# Nothing environment-specific belongs in source. Paths, expected formats,
+# thresholds and the team number all live here, as values.
+#
+# The team number appears in exactly one place in this project. If this file is
+# missing, the tools say so and fail - they never quietly assume a team.
+
+camera:
+  # Stable path. /dev/videoN moves when a device is replugged or a second
+  # camera appears; the by-id name carries the serial and does not.
+  by_id: /dev/v4l/by-id/usb-DCX-260513-K_Thrifty_01.00.00-video-index0
+  fallback: /dev/video0
+  serial: DCX-260513-K
+  model: thriftiest-cam        # OV9281, 1MP mono global shutter, USB 2.0, 80 deg lens
+
+  # What the camera should be delivering. preflight compares reality to this.
+  expect:
+    width: 1280
+    height: 800
+    fourcc: MJPG
+    min_fps: 25.0
+
+  # Applied by apply_camera_settings.py. v4l2 controls do NOT survive a reboot
+  # or a replug, so this is a list rather than a mapping: order matters.
+  # auto_exposure must be set to manual first or exposure_time_absolute is
+  # flagged inactive and the write is silently discarded.
+  #
+  # exposure_time_absolute is in units of 100us, so 120 = 12ms. That was the
+  # detection floor measured in a room with one overhead LED; a brighter venue
+  # should go lower. See docs/learning_roadmap.md stage 2.
+  controls:
+    - [auto_exposure, 1]              # 1 = manual, 3 = aperture priority (auto)
+    - [exposure_time_absolute, 120]
+    - [power_line_frequency, 0]       # anti-flicker quantises exposure time
+    - [white_balance_automatic, 0]    # mono sensor; the USB bridge invents these
+    - [backlight_compensation, 0]
+  # There is deliberately no gain entry. The OV9281's gain is not exposed over
+  # UVC on this bridge. brightness and gamma are digital operations and amplify
+  # noise rather than signal, so exposure is the only real lever.
+
+  # Controls the hardware does not actually have. The Sunplus bridge advertises
+  # a stock webcam control set regardless of the sensor behind it. Listed so
+  # tools can report them as expected fictions rather than as problems.
+  phantom_controls: [focus_absolute, focus_automatic_continuous, saturation, hue,
+                     white_balance_temperature]
+
+calibration:
+  # Committed with serial and date in the filename. A calibration that cannot be
+  # traced to a specific physical camera is worthless.
+  file: thriftiest-DCX-260513-K-2026-08-24.json
+  expect_hfov_deg: 82.0
+  tolerance_deg: 2.0
+
+photonvision:
+  service: photonvision
+  ui_port: 5800
+  stream_ports: [1181, 1182]   # raw, processed - one pair per camera
+  camera_name: front_left      # position, not brand; ends up in every NT topic
+  nt_table: photonvision
+  settings_dir: /opt/photonvision/photonvision_config
+
+networktables:
+  # With no roboRIO, enable "Run NetworkTables Server" in PhotonVision's
+  # settings and leave this as client_address pointing at localhost.
+  # Once a roboRIO exists it becomes the server: use client_team.
+  #   server         - this tool runs the server (rare; only if nothing else does)
+  #   client_team    - resolve the server from the team number
+  #   client_address - connect to a fixed address
+  mode: client_address
+  team: 2609
+  address: 127.0.0.1
+  identity: camera_tools
+
+preflight:
+  require_clean_throttle: true
+  require_photonvision: true
+  require_nt: true
+  require_detections: false    # set true when a tag is permanently in view
+  nt_timeout_s: 5.0

@@ -1,0 +1,35 @@
+# Pip is used for exactly one reason: robotpy is not packaged in Debian.
+#
+# Everything else comes from apt. OpenCV in particular MUST come from apt
+# (python3-opencv, 4.10.x) - the apt build includes contrib, and cv2.aruco lives
+# in contrib. Never `pip install opencv-python`, and never
+# `pip install --break-system-packages`.
+#
+#   sudo apt install -y python3-opencv python3-yaml v4l-utils
+#   python3 -m venv --system-site-packages .venv     # so apt's OpenCV stays visible
+#   .venv/bin/pip install -r requirements.txt
+#
+# camera_doctor, config_snapshot, make_field_layout and apply_camera_settings
+# need none of this - they run on apt packages alone. Only the NetworkTables
+# layer needs the venv.
+
+pyntcore          # NetworkTables client, needed by pipeline_doctor and preflight
+
+# --- deliberately NOT listed: photonlibpy ---------------------------------
+#
+# It would give per-target detail including pose ambiguity, and it is tempting.
+# It also depends on `opencv-python` and `numpy~=2.3`, and installing it here
+# pulled in **OpenCV 5.0 with no contrib** plus a newer numpy. In a venv created
+# with --system-site-packages, the venv's site-packages takes precedence over
+# apt's dist-packages, so every tool run with .venv/bin/python silently lost
+# `cv2.aruco` - the exact failure the operating standards warn about, arriving
+# through a dependency rather than through a direct install.
+#
+# If you decide you need it, install it without its dependencies and verify
+# afterwards that OpenCV still comes from apt:
+#
+#   .venv/bin/pip install --no-deps photonlibpy
+#   .venv/bin/python -c "import cv2; print(cv2.__version__, cv2.__file__, hasattr(cv2,'aruco'))"
+#
+# Want 4.10.x, a dist-packages path, and True. If you get 5.x or a
+# site-packages path, uninstall opencv-python and numpy from the venv.

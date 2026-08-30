@@ -40,11 +40,20 @@ def camera(cfg, f):
 
 
 def controls(cfg, f):
+    """Compare v4l2 controls against config, separating the ones we own.
+
+    PhotonVision sets exposure (and brightness) when it opens the camera and
+    wins that argument, so a mismatch there is informational. Nothing else
+    touches the rest - so a mismatch in those is a real fault, and usually means
+    a reboot or replug reverted them. Lumping the two together hid a genuine
+    failure behind an expected one.
+    """
     wanted = cfg.get("camera", {}).get("controls") or []
     if not wanted:
         return SKIP, "controls", "none configured"
+    managed = set(cfg.get("camera", {}).get("photonvision_managed") or [])
     got = f.get("controls", {})
-    bad = []
+    ours, theirs = [], []
     for item in wanted:
         if isinstance(item, (list, tuple)) and len(item) == 2:
             name, value = item
@@ -54,11 +63,16 @@ def controls(cfg, f):
             continue
         actual = got.get(name, {}).get("value")
         if actual is None or str(actual) != str(value):
-            bad.append("%s=%s (want %s)" % (name, actual, value))
-    if bad:
-        # Expected while PhotonVision owns the camera: it sets its own exposure
-        # when it opens the device, and it wins.
-        return FAIL, "controls", "; ".join(bad) + "  - PhotonVision overrides these while it owns the camera"
+            (theirs if name in managed else ours).append(
+                "%s=%s (want %s)" % (name, actual, value))
+    if ours:
+        detail = "; ".join(ours) + "  - run: vd apply"
+        if theirs:
+            detail += "   (also %d PhotonVision-managed: %s)" % (len(theirs), "; ".join(theirs))
+        return FAIL, "controls", detail
+    if theirs:
+        return PASS, "controls", ("%d match; %s set by PhotonVision, which owns them"
+                                  % (len(wanted) - len(theirs), "; ".join(theirs)))
     return PASS, "controls", "%d match config" % len(wanted)
 
 

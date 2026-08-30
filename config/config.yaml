@@ -39,6 +39,12 @@ camera:
   # UVC on this bridge. brightness and gamma are digital operations and amplify
   # noise rather than signal, so exposure is the only real lever.
 
+  # Controls PhotonVision sets for itself when it opens the camera. It wins that
+  # argument, so preflight reports a mismatch here as information rather than a
+  # fault. Everything NOT listed is ours alone: nothing else writes it, so a
+  # mismatch means a reboot or a replug reverted it and `vd apply` is the fix.
+  photonvision_managed: [auto_exposure, exposure_time_absolute, brightness]
+
   # Controls the hardware does not actually have. The Sunplus bridge advertises
   # a stock webcam control set regardless of the sensor behind it. Listed so
   # tools can report them as expected fictions rather than as problems.

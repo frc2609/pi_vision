@@ -19,7 +19,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from vision import camera, field, tune                    # noqa: E402
+from vision import camera, checks, field, tune                    # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
@@ -172,6 +172,53 @@ class TestFieldLayout(unittest.TestCase):
         self.assertAlmostEqual(field.implied_separation(self.left, self.right),
                                0.708, places=3)
 
+
+
+
+class TestControlsCheck(unittest.TestCase):
+    """A mismatch we own is a fault; one PhotonVision owns is information.
+
+    Lumping them together hid a real failure - power_line_frequency reverting
+    after a reboot - behind an expected one.
+    """
+
+    CFG = {"camera": {"controls": [["auto_exposure", 1],
+                                   ["exposure_time_absolute", 120],
+                                   ["power_line_frequency", 0]],
+                      "photonvision_managed": ["auto_exposure",
+                                               "exposure_time_absolute"]}}
+
+    def facts(self, **vals):
+        return {"controls": {k: {"value": str(v), "flags": ""} for k, v in vals.items()}}
+
+    def test_all_matching_passes(self):
+        s, _, _ = checks.controls(self.CFG, self.facts(
+            auto_exposure=1, exposure_time_absolute=120, power_line_frequency=0))
+        self.assertEqual(s, checks.PASS)
+
+    def test_photonvision_managed_mismatch_is_not_a_failure(self):
+        s, _, detail = checks.controls(self.CFG, self.facts(
+            auto_exposure=1, exposure_time_absolute=323, power_line_frequency=0))
+        self.assertEqual(s, checks.PASS)
+        self.assertIn("PhotonVision", detail)
+
+    def test_our_own_mismatch_is_a_failure(self):
+        s, _, detail = checks.controls(self.CFG, self.facts(
+            auto_exposure=1, exposure_time_absolute=120, power_line_frequency=2))
+        self.assertEqual(s, checks.FAIL)
+        self.assertIn("vd apply", detail)
+
+    def test_both_kinds_reports_ours_first(self):
+        s, _, detail = checks.controls(self.CFG, self.facts(
+            auto_exposure=1, exposure_time_absolute=323, power_line_frequency=2))
+        self.assertEqual(s, checks.FAIL)
+        self.assertLess(detail.index("power_line_frequency"),
+                        detail.index("exposure_time_absolute"))
+
+    def test_absent_control_counts_as_ours(self):
+        s, _, _ = checks.controls(self.CFG, self.facts(
+            auto_exposure=1, exposure_time_absolute=120))
+        self.assertEqual(s, checks.FAIL)
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,10 +62,17 @@ camera/
         └── field.py              corner field-layout geometry
 ```
 
-**One state model, several views.** `state.facts()` gathers what is true once;
-the human report, `--json`, the saved snapshot and the preflight checks are all
-views onto it rather than four implementations of "look at the camera". Parsers
-take text and return data, which is what makes `tests/` possible without a Pi.
+**One state model, several views.** `state.facts()` gathers what is true once
+per camera; the human report, `--json`, the saved snapshot and the preflight
+checks are all views onto it rather than four implementations of "look at the
+camera". Parsers take text and return data, which is what makes `tests/`
+possible without a Pi.
+
+**Any number of cameras.** `config.yaml` holds a `cameras:` list with shared
+`camera_defaults`. Every command works on all of them by default and takes
+`--camera <name>` to narrow. Per-camera checks publish under the camera's name,
+so a two-camera robot gets two sets of dashboard lights and one `ready` that
+ANDs everything.
 
 ## Setup
 

@@ -6,48 +6,73 @@
 # The team number appears in exactly one place in this project. If this file is
 # missing, the tools say so and fail - they never quietly assume a team.
 
-camera:
-  # Stable path. /dev/videoN moves when a device is replugged or a second
-  # camera appears; the by-id name carries the serial and does not.
-  by_id: /dev/v4l/by-id/usb-DCX-260513-K_Thrifty_01.00.00-video-index0
-  fallback: /dev/video0
-  serial: DCX-260513-K
-  model: thriftiest-cam        # OV9281, 1MP mono global shutter, USB 2.0, 80 deg lens
+# --- cameras --------------------------------------------------------------
+#
+# A list, however many there are. Every tool takes `--camera <name>` to work on
+# one; with no flag they cover all of them.
+#
+# `name` is the PhotonVision nickname, which is also its NetworkTables table
+# name. Position, not brand - it ends up in every NT topic and every dashboard
+# layout, so it is expensive to change later.
+#
+# Identity matters more than it looks. Intrinsics belong to one physical camera,
+# so swapping two identical models silently invalidates both calibrations while
+# the format, framerate and detections all still look perfect. Prefer `by_id`,
+# which carries the serial. If two units ship with identical descriptors, by-id
+# collides and resolves to whichever enumerated first - then use `by_path`
+# instead, which identifies the physical USB port. On a robot that is arguably
+# the better rule anyway: "front_left is whatever is plugged into this port".
 
-  # What the camera should be delivering. preflight compares reality to this.
+camera_defaults:
   expect:
     width: 1280
     height: 800
     fourcc: MJPG
-    min_fps: 25.0
-
-  # PhotonVision owns every v4l2 control that matters on this camera - Auto
-  # Exposure, Exposure, Brightness, Auto White Balance and White Balance
-  # Temperature are all in its Input tab, and it rewrites them when a pipeline
-  # changes or restarts. Duplicating them here created a second source of truth
-  # and a preflight failure that meant nothing, so the list is gone and the
-  # PhotonVision settings export is what gets committed instead.
-  #
-  # Exposure is in units of 100us, so the UI's "120" is 12ms. Two measured
-  # reference points, both for a 36h11 tag in the same room: the detection floor
-  # was ~250 in daylight and ~820 at night. It is a property of the light, not
-  # of the camera, so it is not a setting anything can hardcode.
-
+  # Controls the Sunplus bridge advertises but the hardware does not have. The
+  # sensor is monochrome and the lens is fixed. Listed so tools report them as
+  # expected fictions rather than as problems.
   phantom_controls: [focus_absolute, focus_automatic_continuous, saturation, hue,
                      white_balance_temperature]
 
-calibration:
-  # Committed with serial and date in the filename. A calibration that cannot be
-  # traced to a specific physical camera is worthless.
-  file: thriftiest-DCX-260513-K-2026-08-24.json
-  expect_hfov_deg: 82.0
-  tolerance_deg: 2.0
+cameras:
+  - name: front_left
+    by_id: /dev/v4l/by-id/usb-DCX-260513-K_Thrifty_01.00.00-video-index0
+    fallback: /dev/video0
+    serial: DCX-260513-K
+    model: thriftiest-cam       # OV9281, 1MP mono global shutter, USB 2.0, 80 deg lens
+    calibration:
+      file: thriftiest-DCX-260513-K-2026-08-24.json
+      expect_hfov_deg: 82.0
+      tolerance_deg: 2.0
+
+  # Second Thriftiest Cam. Fill in by_id and serial from `ls -l /dev/v4l/by-id/`
+  # once it is plugged in, calibrate it separately, and uncomment.
+  # - name: rear
+  #   by_id: /dev/v4l/by-id/usb-<serial>_Thrifty_01.00.00-video-index0
+  #   fallback: /dev/video2
+  #   serial: <serial>
+  #   model: thriftiest-cam
+  #   calibration:
+  #     file: thriftiest-<serial>-<date>.json
+  #     expect_hfov_deg: 82.0
+  #     tolerance_deg: 2.0
+
+# PhotonVision owns every v4l2 control that matters on these cameras - Auto
+# Exposure, Exposure, Brightness, Auto White Balance and White Balance
+# Temperature are all in its Input tab, and it rewrites them when a pipeline
+# changes or restarts. Duplicating them here created a second source of truth
+# and a preflight failure that meant nothing, so there is no controls list and
+# the PhotonVision settings export is what gets committed instead.
+#
+# Exposure is in units of 100us, so the UI's "120" is 12ms. Two measured
+# reference points, both for a 36h11 tag in the same room: the detection floor
+# was ~250 in daylight and ~820 at night. It is a property of the light, not of
+# the camera, so nothing can hardcode it.
 
 photonvision:
   service: photonvision
   ui_port: 5800
   stream_ports: [1181, 1182]   # raw, processed - one pair per camera
-  camera_name: front_left      # position, not brand; ends up in every NT topic
   nt_table: photonvision
   settings_dir: /opt/photonvision/photonvision_config
 

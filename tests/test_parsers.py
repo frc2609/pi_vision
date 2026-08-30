@@ -19,7 +19,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from vision import camera, checks, field, tune                    # noqa: E402
+from vision import camera, checks, field, tune, util                    # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
@@ -175,6 +175,56 @@ class TestFieldLayout(unittest.TestCase):
 
 
 
+class TestCameraConfig(unittest.TestCase):
+    """Cameras are a list, defaults merge into each, and the old shape still loads."""
+
+    CFG = {
+        "camera_defaults": {"expect": {"width": 1280, "height": 800, "fourcc": "MJPG"}},
+        "cameras": [
+            {"name": "front_left", "serial": "AAA", "fallback": "/dev/video0"},
+            {"name": "rear", "serial": "BBB", "fallback": "/dev/video2",
+             "expect": {"width": 640, "height": 400, "fourcc": "MJPG"}},
+        ],
+    }
+
+    def test_all_cameras_returned(self):
+        self.assertEqual([c["name"] for c in util.cameras(self.CFG)],
+                         ["front_left", "rear"])
+
+    def test_defaults_merge_in(self):
+        front = util.cameras(self.CFG, only="front_left")[0]
+        self.assertEqual(front["expect"]["width"], 1280)
+
+    def test_a_camera_can_override_a_default(self):
+        rear = util.cameras(self.CFG, only="rear")[0]
+        self.assertEqual(rear["expect"]["width"], 640)
+        self.assertEqual(rear["expect"]["fourcc"], "MJPG")   # inherited
+
+    def test_filter_by_name(self):
+        self.assertEqual(len(util.cameras(self.CFG, only="rear")), 1)
+        self.assertEqual(util.cameras(self.CFG, only="nope"), [])
+
+    def test_legacy_single_camera_block_still_loads(self):
+        # A config that has not been migrated should still work rather than
+        # failing obscurely.
+        old = {"camera": {"name": "front_left", "fallback": "/dev/video0"}}
+        self.assertEqual([c["name"] for c in util.cameras(old)], ["front_left"])
+
+    def test_no_cameras_is_empty_not_an_error(self):
+        self.assertEqual(util.cameras({}), [])
+
+    def test_device_prefers_by_path_over_fallback(self):
+        # by_id and by_path only win if they exist on disk; in a test neither
+        # does, so the fallback is what should come back.
+        cam = {"by_id": "/nope/by-id", "by_path": "/nope/by-path",
+               "fallback": "/dev/video7"}
+        self.assertEqual(util.device_for(cam), "/dev/video7")
+
+    def test_explicit_override_wins(self):
+        self.assertEqual(util.device_for({"fallback": "/dev/video0"}, "/dev/video9"),
+                         "/dev/video9")
+
+
 class TestIdentityCheck(unittest.TestCase):
     """Intrinsics belong to one physical camera.
 
@@ -183,26 +233,49 @@ class TestIdentityCheck(unittest.TestCase):
     every distance is wrong.
     """
 
-    CFG = {"camera": {"serial": "DCX-260513-K"}}
+    CAM = {"name": "front_left", "serial": "DCX-260513-K"}
     PATH = "/dev/v4l/by-id/usb-DCX-260513-K_Thrifty_01.00.00-video-index0"
 
     def test_matching_serial_passes(self):
-        s, _, _ = checks.identity(self.CFG, {"stable_path": self.PATH})
-        self.assertEqual(s, checks.PASS)
+        r = checks.identity({}, self.CAM, {"stable_path": self.PATH})
+        self.assertEqual(r["status"], checks.PASS)
+        self.assertEqual(r["camera"], "front_left")
 
     def test_different_camera_fails(self):
         other = self.PATH.replace("DCX-260513-K", "DCX-999999-Z")
-        s, _, detail = checks.identity(self.CFG, {"stable_path": other})
-        self.assertEqual(s, checks.FAIL)
-        self.assertIn("DCX-999999-Z", detail)
+        r = checks.identity({}, self.CAM, {"stable_path": other})
+        self.assertEqual(r["status"], checks.FAIL)
+        self.assertIn("DCX-999999-Z", r["detail"])
 
     def test_no_by_id_path_fails(self):
-        s, _, _ = checks.identity(self.CFG, {"stable_path": None})
-        self.assertEqual(s, checks.FAIL)
+        r = checks.identity({}, self.CAM, {"stable_path": None})
+        self.assertEqual(r["status"], checks.FAIL)
 
     def test_no_serial_configured_skips(self):
-        s, _, _ = checks.identity({"camera": {}}, {"stable_path": self.PATH})
-        self.assertEqual(s, checks.SKIP)
+        r = checks.identity({}, {"name": "x"}, {"stable_path": self.PATH})
+        self.assertEqual(r["status"], checks.SKIP)
+
+
+class TestDistinctDevices(unittest.TestCase):
+    """Two cameras resolving to one device is silent and ruinous."""
+
+    def test_two_distinct_devices_pass(self):
+        cams = [{"name": "a", "device": "/dev/video0"},
+                {"name": "b", "device": "/dev/video2"}]
+        self.assertEqual(checks.unique_devices({}, cams)["status"], checks.PASS)
+
+    def test_collision_fails(self):
+        # Identical USB descriptors make by-id resolve both entries to whichever
+        # camera enumerated first.
+        cams = [{"name": "a", "device": "/dev/video0"},
+                {"name": "b", "device": "/dev/video0"}]
+        r = checks.unique_devices({}, cams)
+        self.assertEqual(r["status"], checks.FAIL)
+        self.assertIn("by_path", r["detail"])
+
+    def test_single_camera_skips(self):
+        r = checks.unique_devices({}, [{"name": "a", "device": "/dev/video0"}])
+        self.assertEqual(r["status"], checks.SKIP)
 
 
 class TestCalibrationResolution(unittest.TestCase):
@@ -212,49 +285,43 @@ class TestCalibrationResolution(unittest.TestCase):
     systematic yaw error, with nothing looking wrong.
     """
 
+    CAM = {"name": "front_left"}
+
     def facts(self, cal_size, w, h):
         return {"calibration": {"path": "x.json", "image_size": cal_size},
                 "asked": {"width": w, "height": h, "fourcc": "MJPG"}}
 
     def test_matching_resolution_passes(self):
-        s, _, _ = checks.calibration_resolution({}, self.facts([1280, 800], 1280, 800))
-        self.assertEqual(s, checks.PASS)
+        r = checks.calibration_resolution({}, self.CAM, self.facts([1280, 800], 1280, 800))
+        self.assertEqual(r["status"], checks.PASS)
 
     def test_mismatched_resolution_fails(self):
-        s, _, detail = checks.calibration_resolution({}, self.facts([1280, 800], 640, 400))
-        self.assertEqual(s, checks.FAIL)
-        self.assertIn("do not transfer", detail)
+        r = checks.calibration_resolution({}, self.CAM, self.facts([1280, 800], 640, 400))
+        self.assertEqual(r["status"], checks.FAIL)
+        self.assertIn("do not transfer", r["detail"])
 
     def test_no_size_recorded_skips(self):
-        s, _, _ = checks.calibration_resolution({}, self.facts(None, 640, 400))
-        self.assertEqual(s, checks.SKIP)
-
-    def test_no_calibration_skips(self):
-        s, _, _ = checks.calibration_resolution(
-            {}, {"calibration": {"path": None}, "asked": None})
-        self.assertEqual(s, checks.SKIP)
+        r = checks.calibration_resolution({}, self.CAM, self.facts(None, 640, 400))
+        self.assertEqual(r["status"], checks.SKIP)
 
 
 class TestCalibrationCheck(unittest.TestCase):
-    CFG = {"camera": {"expect": {"width": 1280}},
+    CAM = {"name": "front_left", "expect": {"width": 1280},
            "calibration": {"expect_hfov_deg": 82.0, "tolerance_deg": 2.0}}
 
     def test_good_calibration_passes(self):
-        s, _, _ = checks.calibration(
-            self.CFG, {"calibration": {"path": "x.json", "fx": 733.6}})
-        self.assertEqual(s, checks.PASS)
+        r = checks.calibration({}, self.CAM, {"calibration": {"path": "x.json", "fx": 733.6}})
+        self.assertEqual(r["status"], checks.PASS)
 
     def test_negative_focal_length_is_a_diverged_solve(self):
         # PhotonVision saved fx=-224 and displayed it as a 319 deg FOV.
-        s, _, detail = checks.calibration(
-            self.CFG, {"calibration": {"path": "x.json", "fx": -224.2}})
-        self.assertEqual(s, checks.FAIL)
-        self.assertIn("diverged", detail)
+        r = checks.calibration({}, self.CAM, {"calibration": {"path": "x.json", "fx": -224.2}})
+        self.assertEqual(r["status"], checks.FAIL)
+        self.assertIn("diverged", r["detail"])
 
     def test_wrong_fov_fails(self):
-        s, _, _ = checks.calibration(
-            self.CFG, {"calibration": {"path": "x.json", "fx": 400.0}})
-        self.assertEqual(s, checks.FAIL)
+        r = checks.calibration({}, self.CAM, {"calibration": {"path": "x.json", "fx": 400.0}})
+        self.assertEqual(r["status"], checks.FAIL)
 
 
 if __name__ == "__main__":

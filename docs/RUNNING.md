@@ -25,6 +25,10 @@ detection figures transfer.*
 Every command exits meaningfully: **0** good, **1** degraded, **2** cannot tell.
 `vd preflight && echo ready` works.
 
+**Any number of cameras.** `config.yaml` holds a `cameras:` list; commands cover
+all of them and take `--camera <name>` to narrow. `tune` and `stream` need one,
+so they ask for the flag when several are configured.
+
 **Only one process can hold a V4L2 capture device.** While PhotonVision runs it
 owns the camera, so anything opening the device directly (`vd stream`, and
 `doctor`'s measured column) needs PhotonVision stopped first. The tools detect
@@ -100,9 +104,10 @@ needs no parsing:
 
 | Topic | |
 |---|---|
-| `ready` | the go/no-go light |
-| `power_ok`, `camera_ok`, `controls_ok`, `calibration_ok`, `photonvision_ok`, `networktables_ok` | per-check indicators |
-| `failed`, `skipped` | counts |
+| `ready` | the go/no-go light — every check on every camera |
+| `power_ok`, `photonvision_ok`, `networktables_ok`, `configured_ok`, `distinct_devices_ok` | machine-wide checks |
+| `<camera>/camera_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/calibration_res_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera |
+| `failed`, `skipped`, `cameras` | counts |
 | `seq` | increments every run |
 | `run_epoch_s` | when it last ran |
 

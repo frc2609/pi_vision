@@ -43,9 +43,12 @@ def pkg_version(name):
     return out.strip() if out and "no packages" not in out.lower() else None
 
 
-def calibration(cfg):
-    """Intrinsics from the configured calibration file, if it can be found."""
-    name = (cfg or {}).get("calibration", {}).get("file")
+def calibration(cfg, cam=None):
+    """Intrinsics from a camera's calibration file, if it can be found.
+
+    Per camera, always: intrinsics belong to one physical sensor and lens.
+    """
+    name = ((cam or {}).get("calibration") or {}).get("file")
     path = find_file(cfg, name)
     if not path:
         return {"path": None, "error": "not found" if name else "not configured"}
@@ -70,8 +73,9 @@ def calibration(cfg):
     return out
 
 
-def facts(cfg, dev, probe=False, family="DICT_APRILTAG_36h11"):
-    """Everything true about the camera and its consumers, right now."""
+def facts(cfg, camera_cfg, probe=False, family="DICT_APRILTAG_36h11"):
+    """Everything true about one camera and its consumers, right now."""
+    dev = camera_cfg["device"]
     nodes, byid = cam.list_devices()
     caps = cam.capabilities(dev)
     cur = cam.current_format(dev)
@@ -82,6 +86,7 @@ def facts(cfg, dev, probe=False, family="DICT_APRILTAG_36h11"):
     pv = (cfg or {}).get("photonvision", {})
 
     f = {
+        "name": camera_cfg.get("name"),
         "device": dev,
         "nodes": nodes,
         "stable_path": byid.get(os.path.realpath(dev)) if os.path.exists(dev) else None,
@@ -99,7 +104,7 @@ def facts(cfg, dev, probe=False, family="DICT_APRILTAG_36h11"):
         "hostname": os.uname().nodename if hasattr(os, "uname") else None,
         "ip": ip,
         "ips": ips,
-        "calibration": calibration(cfg),
+        "calibration": calibration(cfg, camera_cfg),
         "delivered": None,
     }
 
@@ -122,8 +127,12 @@ def facts(cfg, dev, probe=False, family="DICT_APRILTAG_36h11"):
 
 # --- snapshots ------------------------------------------------------------
 
-def snapshot(cfg, dev):
-    """A flat, diffable capture of everything that can silently change."""
+def snapshot(cfg, camera_list):
+    """A flat, diffable capture of everything that can silently change.
+
+    Per-camera keys are namespaced by name, so a two-camera setup diffs cleanly
+    and a camera appearing or disappearing shows up as added or removed keys.
+    """
     snap = {"when": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
     snap["host/uname"] = (sh(["uname", "-a"]) or "").strip() or None
 
@@ -146,29 +155,28 @@ def snapshot(cfg, dev):
         snap["service/%s/enabled" % svc] = out.strip() if out else None
 
     nodes, byid = cam.list_devices()
-    snap["camera/device"] = dev
     snap["camera/nodes"] = " ".join(nodes) or None
-    snap["camera/by_id"] = byid.get(os.path.realpath(dev)) if os.path.exists(dev) else None
-    snap["camera/usb_bus"] = cam.bus(dev)
-
-    caps = cam.capabilities(dev) or {}
-    for fmt in caps:
-        b = cam.best_mode(caps, fmt)
-        snap["camera/can/%s" % fmt] = ("%dx%d@%.0f (%d modes)"
-                                       % (b[0], b[1], b[2], len(caps[fmt]))) if b else None
-    cur = cam.current_format(dev)
-    snap["camera/current_format"] = "%dx%d %s" % cur if cur else None
-
-    # v4l2 controls are the classic silent change: they do not survive a reboot
-    # or a replug, and nothing announces that they have gone back to default.
-    for name, (val, flags) in (cam.controls(dev) or {}).items():
-        snap["camera/ctrl/%s" % name] = "%s%s" % (val, " [%s]" % flags if flags else "")
-
-    c = calibration(cfg)
-    for k in ("path", "sha256_16", "fx", "fy"):
-        if k in c:
-            snap["calibration/" + k] = c[k]
-
+    for entry in camera_list or []:
+        name, dev = entry.get("name", "camera"), entry["device"]
+        pre = "camera/%s/" % name
+        snap[pre + "device"] = dev
+        snap[pre + "by_id"] = byid.get(os.path.realpath(dev)) if os.path.exists(dev) else None
+        snap[pre + "usb_bus"] = cam.bus(dev)
+        caps = cam.capabilities(dev) or {}
+        for fmt in caps:
+            b = cam.best_mode(caps, fmt)
+            snap[pre + "can/" + fmt] = ("%dx%d@%.0f (%d modes)"
+                                        % (b[0], b[1], b[2], len(caps[fmt]))) if b else None
+        cur = cam.current_format(dev)
+        snap[pre + "current_format"] = "%dx%d %s" % cur if cur else None
+        # v4l2 controls are the classic silent change: they do not survive a
+        # reboot or a replug, and nothing announces the reversion.
+        for cname, (val, flags) in (cam.controls(dev) or {}).items():
+            snap[pre + "ctrl/" + cname] = "%s%s" % (val, " [%s]" % flags if flags else "")
+        c = calibration(cfg, entry)
+        for k in ("path", "sha256_16", "fx", "fy", "image_size"):
+            if k in c:
+                snap[pre + "calibration/" + k] = c[k]
     sdir = pv.get("settings_dir")
     if sdir and os.path.isdir(sdir):
         for path in sorted(glob.glob(os.path.join(sdir, "**", "*"), recursive=True)):

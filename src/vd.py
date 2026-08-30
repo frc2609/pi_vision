@@ -23,9 +23,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from vision import camera as cam                                    # noqa: E402
+from vision import camera as camlib                                 # noqa: E402
 from vision import checks, field, nt, state, tune                   # noqa: E402
-from vision.util import load_config, device_from, repo_root         # noqa: E402
+from vision.util import load_config, cameras, device_for, repo_root  # noqa: E402
 
 PV_UI_PORT = 5800
 PV_STREAM_PORTS = (1181, 1182)
@@ -38,21 +38,38 @@ def row(label, value):
 # --- doctor ---------------------------------------------------------------
 
 def cmd_doctor(cfg, args):
-    dev = device_from(cfg, args.device)
-    if not os.path.exists(dev):
-        nodes, _ = cam.list_devices()
-        if args.json:
-            print(json.dumps({"device": dev, "error": "no such device",
-                              "nodes": nodes, "status": 2}, indent=2))
-        else:
-            print("no such device: %s" % dev)
-            print("available: %s" % (" ".join(nodes) or "none - is it plugged in?"))
+    cams = cameras(cfg, only=args.camera)
+    if not cams:
+        print("no cameras configured%s" % (" named %s" % args.camera if args.camera else ""))
         return 2
-
-    f = state.facts(cfg, dev, probe=not args.no_probe, family=args.family)
+    out, worst = [], 0
+    for cam in cams:
+        dev = device_for(cam, args.device)
+        cam = dict(cam, device=dev)
+        if not os.path.exists(dev):
+            nodes, _ = camlib.list_devices()
+            out.append({"name": cam["name"], "device": dev,
+                        "error": "no such device", "nodes": nodes, "status": 2})
+            worst = max(worst, 2)
+            if not args.json:
+                print("\n### %s: no such device: %s" % (cam["name"], dev))
+                print("available: %s" % (" ".join(nodes) or "none - is it plugged in?"))
+            continue
+        f = state.facts(cfg, cam, probe=not args.no_probe, family=args.family)
+        worst = max(worst, f.get("status", 0))
+        out.append(f)
+        if not args.json:
+            report_camera(cfg, cam, f)
     if args.json:
-        print(json.dumps(f, indent=2, default=str))
-        return f.get("status", 0)
+        print(json.dumps(out if len(out) != 1 else out[0], indent=2, default=str))
+    elif len(cams) > 1:
+        print("  %d cameras reported\n" % len(cams))
+    return worst
+
+
+def report_camera(cfg, cam, f):
+    dev = f["device"]
+    print("\n### %s  (%s)" % (cam["name"], dev))
 
     print("\n=== devices ===")
     row("video nodes", " ".join(f["nodes"]))
@@ -84,7 +101,7 @@ def cmd_doctor(cfg, args):
     if exp:
         try:
             row("-> max fps", "%.1f  (10000 / %s)"
-                % (cam.max_fps_for_exposure(float(exp)), exp))
+                % (camlib.max_fps_for_exposure(float(exp)), exp))
         except ValueError:
             pass
     if "gain" not in f["controls"]:
@@ -123,17 +140,18 @@ def cmd_doctor(cfg, args):
     pv = cfg.get("photonvision", {})
     if f["services"].get(pv.get("service", "photonvision")) == "active":
         print("  PhotonVision UI      http://%s:%d" % (ip or mdns, pv.get("ui_port", PV_UI_PORT)))
-        for label, p in zip(("raw camera stream", "processed stream"),
-                            pv.get("stream_ports", PV_STREAM_PORTS)):
-            print("  %-20s http://%s:%d/stream.mjpg" % (label, ip or mdns, p))
+        # One stream pair per camera, allocated in order.
+        ports = pv.get("stream_ports", PV_STREAM_PORTS)
+        idx = next((i for i, c in enumerate(cameras(cfg)) if c["name"] == cam["name"]), 0)
+        for label, p in zip(("raw camera stream", "processed stream"), ports):
+            print("  %-20s http://%s:%d/stream.mjpg" % (label, ip or mdns, p + 2 * idx))
         if ip:
             print("    use the IP, not %s - Chrome blocks .local sub-resources" % mdns)
             print("    from a plain-HTTP page, so the embedded stream stays blank")
         print("  its log              journalctl -u photonvision -f")
     print("  health monitor log   journalctl -u health_monitor -f")
     print("  live camera format   v4l2-ctl -d %s --all | grep -A4 'Format Video'" % dev)
-    print("  this tool, streaming vd stream   -> http://%s:8090\n" % (ip or mdns))
-    return f.get("status", 0)
+    print("  this tool, streaming vd stream --camera %s\n" % cam["name"])
 
 
 # --- nt -------------------------------------------------------------------
@@ -224,11 +242,20 @@ def cmd_nt(cfg, args):
 
 # --- preflight ------------------------------------------------------------
 
-def publish_preflight(cfg, dev, interval):
+def gather(cfg, only=None):
+    """(cameras, facts) - one facts dict per configured camera."""
+    cams = cameras(cfg, only=only)
+    return cams, [state.facts(cfg, c, probe=False) for c in cams]
+
+
+def publish_preflight(cfg, interval, only=None):
     """Publish the preflight verdict to NetworkTables for a dashboard.
 
     Booleans and numbers only, per the operating standards - a formatted string
     does not graph and cannot be consumed without parsing.
+
+    Per-camera checks publish under the camera's name, so a two-camera robot
+    gets two sets of lights and one `ready` that ANDs everything.
 
     Runs as a long-lived publisher on purpose. NT4 unpublishes a client's topics
     when it disconnects, so **if this process dies the lights disappear from the
@@ -236,7 +263,6 @@ def publish_preflight(cfg, dev, interval):
     light is the failure mode worth designing out.
     """
     import time as _t
-    from vision import nt as _nt
 
     inst, err = nt.connect(cfg.get("networktables"),
                            cfg.get("preflight", {}).get("nt_timeout_s", 5.0))
@@ -249,17 +275,20 @@ def publish_preflight(cfg, dev, interval):
     print("publishing to /Vision/preflight every %.0fs (ctrl-C to stop)" % interval)
     try:
         while True:
-            f = state.facts(cfg, dev, probe=False)
-            rows = checks.run_all(cfg, f)
-            fails = sum(1 for s, _, _ in rows if s == checks.FAIL)
-            skips = sum(1 for s, _, _ in rows if s == checks.SKIP)
-            for status, name, _ in rows:
+            cams, facts = gather(cfg, only)
+            rows = checks.run_all(cfg, cams, facts)
+            fails = sum(1 for r in rows if r["status"] == checks.FAIL)
+            skips = sum(1 for r in rows if r["status"] == checks.SKIP)
+            for r in rows:
                 # SKIP is never a failure, so it shows green. `skipped` says how
                 # many checks could not run.
-                table.getEntry("%s_ok" % name).setBoolean(status != checks.FAIL)
+                key = ("%s/%s_ok" % (r["camera"], r["name"]) if r["camera"]
+                       else "%s_ok" % r["name"])
+                table.getEntry(key).setBoolean(r["status"] != checks.FAIL)
             table.getEntry("ready").setBoolean(fails == 0)
             table.getEntry("failed").setDouble(float(fails))
             table.getEntry("skipped").setDouble(float(skips))
+            table.getEntry("cameras").setDouble(float(len(cams)))
             seq += 1
             # A flat `seq` on a graph means this publisher is wedged but still
             # connected - the one failure the vanishing-topics trick misses.
@@ -275,16 +304,16 @@ def publish_preflight(cfg, dev, interval):
 
 
 def cmd_preflight(cfg, args):
-    dev = device_from(cfg, args.device)
     if args.publish:
-        return publish_preflight(cfg, dev, args.interval)
-    f = state.facts(cfg, dev, probe=False)
-    rows = checks.run_all(cfg, f)
+        return publish_preflight(cfg, args.interval, args.camera)
+    cams, facts = gather(cfg, args.camera)
+    rows = checks.run_all(cfg, cams, facts)
     print()
-    for status, name, detail in rows:
-        print("  %-4s  %-22s %s" % (status, name, detail))
-    fails = sum(1 for s, _, _ in rows if s == checks.FAIL)
-    skips = sum(1 for s, _, _ in rows if s == checks.SKIP)
+    for r in rows:
+        label = ("%s %s" % (r["camera"], r["name"])) if r["camera"] else r["name"]
+        print("  %-4s  %-28s %s" % (r["status"], label, r["detail"]))
+    fails = sum(1 for r in rows if r["status"] == checks.FAIL)
+    skips = sum(1 for r in rows if r["status"] == checks.SKIP)
     print()
     print("  NOT READY - %d check(s) failed%s" % (fails, ", %d skipped" % skips if skips else "")
           if fails else "  READY%s" % (" (%d skipped)" % skips if skips else ""))
@@ -318,7 +347,7 @@ def cmd_snapshot(cfg, args):
         return 1 if changes else 0
 
     import time as _t
-    snap = state.snapshot(cfg, device_from(cfg, args.device))
+    snap = state.snapshot(cfg, cameras(cfg, only=args.camera))
     if args.print:
         print(json.dumps(snap, indent=2, sort_keys=True))
         return 0
@@ -334,8 +363,15 @@ def cmd_snapshot(cfg, args):
 
 def cmd_tune(cfg, args):
     pv = cfg.get("photonvision", {})
-    name = args.camera or pv.get("camera_name")
-    dev = device_from(cfg, args.device)
+    cams = cameras(cfg, only=args.camera)
+    if not cams:
+        print("no cameras configured%s" % (" named %s" % args.camera if args.camera else ""))
+        return 2
+    if len(cams) > 1:
+        print("%d cameras configured - pick one with --camera %s"
+              % (len(cams), " | ".join(c["name"] for c in cams)))
+        return 2
+    name, dev = cams[0]["name"], device_for(cams[0], args.device)
     inst, err = nt.connect(cfg.get("networktables"),
                            cfg.get("preflight", {}).get("nt_timeout_s", 5.0))
     if inst is None or err:
@@ -350,14 +386,14 @@ def cmd_tune(cfg, args):
         return 2
 
     rows = []
-    original_exposure = cam.read_exposure(dev)
+    original_exposure = camlib.read_exposure(dev)
     original_pipeline = nt.read(entries[nt.PIPELINE_STATE])
     try:
         if args.sweep_exposure:
             steps = [int(x) for x in args.sweep_exposure.split(",")]
             print("sweeping exposure %s - keep the tag and camera still\n" % steps)
             for ticks in steps:
-                got, ok = cam.set_exposure(dev, ticks)
+                got, ok = camlib.set_exposure(dev, ticks)
                 if not ok:
                     print("  requested %d, device reports %s - skipping" % (ticks, got))
                     continue
@@ -394,9 +430,9 @@ def cmd_tune(cfg, args):
         print("\ninterrupted")
     finally:
         if args.sweep_exposure and original_exposure:
-            cam.set_exposure(dev, int(original_exposure))
+            camlib.set_exposure(dev, int(original_exposure))
             print("\nrestored exposure to %.1f ms"
-                  % (original_exposure / cam.EXPOSURE_TICKS_PER_MS))
+                  % (original_exposure / camlib.EXPOSURE_TICKS_PER_MS))
         if args.sweep_pipeline and original_pipeline is not None:
             nt.request_pipeline(entries, int(original_pipeline))
             print("restored pipeline %d" % int(original_pipeline))
@@ -459,7 +495,9 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__)
     ap.add_argument("-c", "--config")
-    ap.add_argument("-d", "--device", help="default: camera.by_id from config")
+    ap.add_argument("-d", "--device", help="override the resolved device path")
+    ap.add_argument("--camera", metavar="NAME",
+                    help="act on one configured camera; default is all of them")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("doctor", help="camera diagnostics")
@@ -491,7 +529,6 @@ def main():
     p.add_argument("--label", default="run")
     p.add_argument("-s", "--seconds", type=float, default=12.0)
     p.add_argument("--csv")
-    p.add_argument("--camera")
     p.add_argument("--sweep-exposure", metavar="A,B,C")
     p.add_argument("--sweep-pipeline", metavar="A,B,C")
     p.set_defaults(fn=cmd_tune)
@@ -500,7 +537,8 @@ def main():
     p.add_argument("--port", type=int, default=8090)
     p.add_argument("--family", default="DICT_APRILTAG_36h11")
     p.set_defaults(fn=lambda cfg, a: __import__("vision.stream", fromlist=["serve"])
-                   .serve(device_from(cfg, a.device), a.port, a.family))
+                   .serve(device_for((cameras(cfg, only=a.camera) or [{}])[0], a.device),
+                          a.port, a.family))
 
     p = sub.add_parser("field", help="generate a corner field layout")
     p.add_argument("--left", nargs="+", metavar="K=V", required=True)

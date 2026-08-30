@@ -54,19 +54,58 @@ def load_config(explicit=None):
         return None, "cannot parse %s: %s" % (path, e)
 
 
-def device_from(cfg, override=None):
-    """The camera path to use: explicit override, then by-id, then the fallback.
+def _merge(default, override):
+    """Shallow-merge one level of dicts, so a camera can override part of a default."""
+    out = dict(default or {})
+    for k, v in (override or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            merged = dict(out[k])
+            merged.update(v)
+            out[k] = merged
+        else:
+            out[k] = v
+    return out
 
-    by-id is preferred because it carries the serial and survives replugging;
-    /dev/videoN does not.
+
+def cameras(cfg, only=None):
+    """Every configured camera, normalised, with defaults merged and the device
+    path resolved. Returns a list of dicts; `only` filters by name.
+
+    Accepts the older single-`camera:` shape as a one-element list, so a config
+    that has not been migrated still works rather than failing obscurely.
+    """
+    cfg = cfg or {}
+    defaults = cfg.get("camera_defaults", {})
+    raw = cfg.get("cameras")
+    if raw is None:
+        legacy = cfg.get("camera")
+        raw = [legacy] if legacy else []
+    out = []
+    for i, entry in enumerate(raw):
+        cam = _merge(defaults, entry or {})
+        cam.setdefault("name", "camera%d" % i)
+        cam["device"] = device_for(cam)
+        out.append(cam)
+    if only:
+        out = [c for c in out if c["name"] == only]
+    return out
+
+
+def device_for(cam, override=None):
+    """The path to use: explicit override, then by-id, then by-path, then fallback.
+
+    by-id is preferred because it carries the serial and survives replugging.
+    by-path identifies the physical USB port instead, which is the fallback when
+    two identical cameras ship with the same descriptor - and on a robot, "this
+    camera is whatever is in this port" is arguably the better rule anyway.
     """
     if override:
         return override
-    cam = (cfg or {}).get("camera", {})
-    byid = cam.get("by_id")
-    if byid and os.path.exists(byid):
-        return byid
-    return cam.get("fallback", "/dev/video0")
+    for key in ("by_id", "by_path"):
+        p = (cam or {}).get(key)
+        if p and os.path.exists(p):
+            return p
+    return (cam or {}).get("fallback", "/dev/video0")
 
 
 def find_file(cfg, name):

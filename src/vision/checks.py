@@ -101,24 +101,50 @@ def camera_format(cfg, cam, f):
 
 
 def identity(cfg, cam, f):
-    """Is this the camera we calibrated?
+    """Can we say *which* physical camera this is?
 
-    Intrinsics belong to a specific physical camera. With identical models on
-    the bench, a swap silently invalidates the calibration and nothing else
-    notices - format, framerate and detections all look perfect while every
-    distance is wrong.
+    Intrinsics belong to a specific sensor and lens, so a swap silently
+    invalidates a calibration while format, framerate and detections all still
+    look perfect.
+
+    Two ways to establish identity, in order of preference:
+
+    - **by_path** - the physical USB port. Unambiguous, and the only option for
+      cameras whose USB descriptors are not unique. Measured on two Thriftiest
+      Cams: both report `DCX-260513-K / Thrifty / 01.00.00`, so /dev/v4l/by-id/
+      holds one link for both and the second to enumerate overwrites the first.
+      A config using by_id then points at whichever plugged in last, with every
+      other check still passing.
+    - **serial** - only meaningful when the descriptor really is per-unit.
     """
     name = cam["name"]
+    dev = f.get("device")
+
+    path = cam.get("by_path")
+    if path:
+        if not os.path.exists(path):
+            return finding(FAIL, "identity",
+                           "no camera in the configured port (%s)"
+                           % os.path.basename(path), name)
+        if os.path.realpath(path) != os.path.realpath(dev or ""):
+            return finding(FAIL, "identity",
+                           "configured port resolves to %s but using %s"
+                           % (os.path.realpath(path), dev), name)
+        return finding(PASS, "identity", "port %s%s"
+                       % (os.path.basename(path),
+                          "  (%s)" % cam["label"] if cam.get("label") else ""), name)
+
     serial = cam.get("serial")
     if not serial:
-        return finding(SKIP, "identity", "no serial in config", name)
-    path = f.get("stable_path") or cam.get("by_path")
-    if not path:
+        return finding(SKIP, "identity",
+                       "no by_path or serial - cannot tell which camera this is", name)
+    byid = f.get("stable_path")
+    if not byid:
         return finding(FAIL, "identity", "no by-id path - cannot confirm which "
                        "camera this is, and device numbering moves on replug", name)
-    if serial not in path:
+    if serial not in byid:
         return finding(FAIL, "identity", "expected serial %s, connected camera is %s"
-                       % (serial, os.path.basename(path)), name)
+                       % (serial, os.path.basename(byid)), name)
     return finding(PASS, "identity", serial, name)
 
 

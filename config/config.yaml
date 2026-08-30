@@ -15,13 +15,25 @@
 # name. Position, not brand - it ends up in every NT topic and every dashboard
 # layout, so it is expensive to change later.
 #
-# Identity matters more than it looks. Intrinsics belong to one physical camera,
-# so swapping two identical models silently invalidates both calibrations while
-# the format, framerate and detections all still look perfect. Prefer `by_id`,
-# which carries the serial. If two units ship with identical descriptors, by-id
-# collides and resolves to whichever enumerated first - then use `by_path`
-# instead, which identifies the physical USB port. On a robot that is arguably
-# the better rule anyway: "front_left is whatever is plugged into this port".
+# IDENTIFIED BY PORT, NOT BY SERIAL, and that is not a preference. Measured
+# 2026-08-29 with two Thriftiest Cams connected at once - both report byte
+# identical USB descriptors:
+#
+#     Manufacturer: DCX-260513-K    Product: Thrifty    SerialNumber: 01.00.00
+#
+# "DCX-260513-K" is a model or batch code and the SerialNumber field is a
+# firmware version. So /dev/v4l/by-id/ holds ONE link for both cameras, and the
+# second to enumerate overwrites the first. A config using by_id silently points
+# at whichever camera plugged in last, with every check still passing - which is
+# exactly what happened here before this was rewritten.
+#
+# by_path names the physical USB port, which is unambiguous. On a robot it is
+# also the better rule: "front_left is whatever is plugged into this port".
+# Label the ports on the Pi and the cameras themselves.
+#
+# `label` is a team-assigned physical ID - write it on the camera with a marker.
+# It is what calibration filenames key to, because these cameras give us nothing
+# unique to key to otherwise.
 
 camera_defaults:
   expect:
@@ -36,26 +48,27 @@ camera_defaults:
 
 cameras:
   - name: front_left
-    by_id: /dev/v4l/by-id/usb-DCX-260513-K_Thrifty_01.00.00-video-index0
+    label: cam-a                # write this on the camera
+    by_path: /dev/v4l/by-path/platform-xhci-hcd.1-usb-0:1:1.0-video-index0
     fallback: /dev/video0
-    serial: DCX-260513-K
     model: thriftiest-cam       # OV9281, 1MP mono global shutter, USB 2.0, 80 deg lens
     calibration:
       file: thriftiest-DCX-260513-K-2026-08-24.json
       expect_hfov_deg: 82.0
       tolerance_deg: 2.0
 
-  # Second Thriftiest Cam. Fill in by_id and serial from `ls -l /dev/v4l/by-id/`
-  # once it is plugged in, calibrate it separately, and uncomment.
-  # - name: rear
-  #   by_id: /dev/v4l/by-id/usb-<serial>_Thrifty_01.00.00-video-index0
-  #   fallback: /dev/video2
-  #   serial: <serial>
-  #   model: thriftiest-cam
-  #   calibration:
-  #     file: thriftiest-<serial>-<date>.json
-  #     expect_hfov_deg: 82.0
-  #     tolerance_deg: 2.0
+  - name: rear
+    label: cam-b
+    by_path: /dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1:1.0-video-index0
+    fallback: /dev/video2
+    model: thriftiest-cam
+    # Not calibrated yet. Calibrate it in PhotonVision at the resolution it will
+    # run, then name the file after the label above - the USB descriptor cannot
+    # tell these two apart.
+    calibration:
+      file: null
+      expect_hfov_deg: 82.0
+      tolerance_deg: 2.0
 
 # PhotonVision owns every v4l2 control that matters on these cameras - Auto
 # Exposure, Exposure, Brightness, Auto White Balance and White Balance

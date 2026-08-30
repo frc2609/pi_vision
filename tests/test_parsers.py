@@ -213,8 +213,8 @@ class TestCameraConfig(unittest.TestCase):
     def test_no_cameras_is_empty_not_an_error(self):
         self.assertEqual(util.cameras({}), [])
 
-    def test_device_prefers_by_path_over_fallback(self):
-        # by_id and by_path only win if they exist on disk; in a test neither
+    def test_device_falls_back_when_no_link_exists(self):
+        # by_path and by_id only win if they exist on disk; in a test neither
         # does, so the fallback is what should come back.
         cam = {"by_id": "/nope/by-id", "by_path": "/nope/by-path",
                "fallback": "/dev/video7"}
@@ -226,11 +226,11 @@ class TestCameraConfig(unittest.TestCase):
 
 
 class TestIdentityCheck(unittest.TestCase):
-    """Intrinsics belong to one physical camera.
+    """Can we say *which* physical camera this is?
 
-    With two identical models on the bench, a swap silently invalidates the
-    calibration - format, framerate and detections all still look perfect while
-    every distance is wrong.
+    Two Thriftiest Cams report byte-identical USB descriptors, so by-id holds
+    one link for both and the second to enumerate overwrites the first. Identity
+    has to come from the port.
     """
 
     CAM = {"name": "front_left", "serial": "DCX-260513-K"}
@@ -251,9 +251,25 @@ class TestIdentityCheck(unittest.TestCase):
         r = checks.identity({}, self.CAM, {"stable_path": None})
         self.assertEqual(r["status"], checks.FAIL)
 
-    def test_no_serial_configured_skips(self):
+    def test_no_identifier_at_all_skips(self):
+        # Nothing to identify by is a SKIP, not a pass - we simply cannot say.
         r = checks.identity({}, {"name": "x"}, {"stable_path": self.PATH})
         self.assertEqual(r["status"], checks.SKIP)
+
+    def test_missing_port_fails(self):
+        cam = {"name": "rear", "by_path": "/dev/v4l/by-path/does-not-exist"}
+        r = checks.identity({}, cam, {"device": "/dev/video2"})
+        self.assertEqual(r["status"], checks.FAIL)
+        self.assertIn("no camera in the configured port", r["detail"])
+
+    def test_by_path_wins_over_a_non_unique_serial(self):
+        # A serial shared by every unit of a model cannot establish identity;
+        # the port can, so it is consulted first.
+        cam = {"name": "rear", "serial": "DCX-260513-K",
+               "by_path": "/dev/v4l/by-path/does-not-exist"}
+        r = checks.identity({}, cam, {"device": "/dev/video2",
+                                      "stable_path": self.PATH})
+        self.assertEqual(r["status"], checks.FAIL)
 
 
 class TestDistinctDevices(unittest.TestCase):

@@ -101,7 +101,11 @@ def device_for(cam, override=None):
     """
     if override:
         return override
-    for key in ("by_id", "by_path"):
+    # by_path first: it names the physical USB port and is unambiguous, whereas
+    # by_id depends on the USB descriptor being unique - which for two identical
+    # Thriftiest Cams it is not, so its link resolves to whichever enumerated
+    # last and silently points at the wrong camera.
+    for key in ("by_path", "by_id"):
         p = (cam or {}).get(key)
         if p and os.path.exists(p):
             return p

@@ -20,7 +20,6 @@ detection figures transfer.*
 | Image fine, PhotonVision shows nothing | `vd nt` | detection may be running and publishing nowhere |
 | Framerate is bad | `vd doctor` then `vd nt` | separates the camera limit from the processing limit |
 | "It worked yesterday" | `vd snapshot --diff` | the only command that can answer this |
-| After a reboot or replug | `vd apply` | v4l2 controls survive neither |
 | Choosing settings | `vd tune` | measurement instead of opinion |
 
 Every command exits meaningfully: **0** good, **1** degraded, **2** cannot tell.
@@ -35,7 +34,7 @@ this and say so rather than failing obscurely.
 
 ## Two Python environments, on purpose
 
-- **Camera commands** — `doctor`, `snapshot`, `apply`, `stream`, `field` — run
+- **Camera commands** — `doctor`, `snapshot`, `stream`, `field` — run
   on **system `python3`**. They use apt's OpenCV.
 - **NetworkTables commands** — `nt`, `tune`, and `preflight`'s network check —
   need `pyntcore`, which is pip-only, so they run from **`.venv/bin/python`**.
@@ -303,29 +302,6 @@ calibration hash and focal length, and hashes of PhotonVision's settings.
 **Exit code is `1` when the diff found changes**, `0` when identical.
 
 ---
-
-## `vd apply` — put the controls back
-
-```bash
-python3 src/vd.py apply        # apply and verify now
-./scripts/install_service.sh   # apply at every boot
-```
-
-**v4l2 controls do not survive a reboot or a replug.** They live on the device,
-not on disk, and nothing announces that they have reverted.
-
-One line per control with `want`, `got`, and `ok` or `MISMATCH`. A mismatch
-means the control does not exist on this camera, the driver clamped the value,
-or an automatic mode still owns it.
-
-Order matters and `vd apply` handles it: `exposure_time_absolute` is inactive
-while `auto_exposure` is in an automatic mode, and a write to an inactive
-control is **accepted and discarded**, so manual mode is set first. Every value
-is read back, because v4l2 reports success while ignoring you.
-
-> PhotonVision imposes its own pipeline settings when it opens the camera. This
-> governs the window before PhotonVision starts and any tool using the camera
-> directly. Where PhotonVision owns the camera, set exposure in its UI.
 
 ---
 

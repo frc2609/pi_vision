@@ -21,33 +21,18 @@ camera:
     fourcc: MJPG
     min_fps: 25.0
 
-  # Applied by apply_camera_settings.py. v4l2 controls do NOT survive a reboot
-  # or a replug, so this is a list rather than a mapping: order matters.
-  # auto_exposure must be set to manual first or exposure_time_absolute is
-  # flagged inactive and the write is silently discarded.
+  # PhotonVision owns every v4l2 control that matters on this camera - Auto
+  # Exposure, Exposure, Brightness, Auto White Balance and White Balance
+  # Temperature are all in its Input tab, and it rewrites them when a pipeline
+  # changes or restarts. Duplicating them here created a second source of truth
+  # and a preflight failure that meant nothing, so the list is gone and the
+  # PhotonVision settings export is what gets committed instead.
   #
-  # exposure_time_absolute is in units of 100us, so 120 = 12ms. That was the
-  # detection floor measured in a room with one overhead LED; a brighter venue
-  # should go lower. See docs/learning_roadmap.md stage 2.
-  controls:
-    - [auto_exposure, 1]              # 1 = manual, 3 = aperture priority (auto)
-    - [exposure_time_absolute, 120]
-    - [power_line_frequency, 0]       # anti-flicker quantises exposure time
-    - [white_balance_automatic, 0]    # mono sensor; the USB bridge invents these
-    - [backlight_compensation, 0]
-  # There is deliberately no gain entry. The OV9281's gain is not exposed over
-  # UVC on this bridge. brightness and gamma are digital operations and amplify
-  # noise rather than signal, so exposure is the only real lever.
+  # Exposure is in units of 100us, so the UI's "120" is 12ms. Two measured
+  # reference points, both for a 36h11 tag in the same room: the detection floor
+  # was ~250 in daylight and ~820 at night. It is a property of the light, not
+  # of the camera, so it is not a setting anything can hardcode.
 
-  # Controls PhotonVision sets for itself when it opens the camera. It wins that
-  # argument, so preflight reports a mismatch here as information rather than a
-  # fault. Everything NOT listed is ours alone: nothing else writes it, so a
-  # mismatch means a reboot or a replug reverted it and `vd apply` is the fix.
-  photonvision_managed: [auto_exposure, exposure_time_absolute, brightness]
-
-  # Controls the hardware does not actually have. The Sunplus bridge advertises
-  # a stock webcam control set regardless of the sensor behind it. Listed so
-  # tools can report them as expected fictions rather than as problems.
   phantom_controls: [focus_absolute, focus_automatic_continuous, saturation, hue,
                      white_balance_temperature]
 
@@ -82,5 +67,13 @@ preflight:
   require_clean_throttle: true
   require_photonvision: true
   require_nt: true
-  require_detections: false    # set true when a tag is permanently in view
+  # The check that matters. Everything else can pass while detection is dead:
+  # exposure drifting below the light's detection floor produces no error
+  # anywhere, just hasTarget going false. Set true when a tag is permanently in
+  # view - on a robot at an event, it should be true.
+  require_detections: false
+  # Nothing is broken at a low framerate, but it is worth saying. Framerate here
+  # is set by exposure and exposure is set by the light: 12 fps at night, 31 in
+  # daylight, 42 with detection lost entirely.
+  min_fps: 10
   nt_timeout_s: 5.0

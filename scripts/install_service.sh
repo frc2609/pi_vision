@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install camera_settings.service. Idempotent - safe to re-run after any change
+# Install vision_preflight.service. Idempotent - safe to re-run after any change
 # to the unit file.
 #
 # Run as your normal user, not root. It uses sudo where it needs to, which keeps
@@ -7,7 +7,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UNIT="camera_settings.service"
+UNIT="vision_preflight.service"
 EXPECTED="$HOME/vision/camera"
 
 echo "camera repo: $REPO"
@@ -29,14 +29,11 @@ done
 python3 -c 'import yaml' 2>/dev/null || {
   echo "missing PyYAML - sudo apt install -y python3-yaml"; exit 1; }
 
-echo "checking the config applies cleanly before installing..."
-if ! python3 "$REPO/src/vd.py" apply --wait 5; then
-  echo
-  echo "vd apply did not succeed. Installing anyway - a camera"
-  echo "that is absent right now is a fine reason to fail, and the unit waits"
-  echo "for it at boot. Re-run this script once the camera is connected if you"
-  echo "want the check to pass."
-  echo
+if [ ! -x "$REPO/.venv/bin/python" ]; then
+  echo "no venv - publishing needs pyntcore:"
+  echo "  python3 -m venv --system-site-packages .venv"
+  echo "  .venv/bin/pip install -r requirements.txt"
+  exit 1
 fi
 
 # Authored in services/ and copied into place. Never edit units directly in
@@ -51,5 +48,5 @@ sudo systemctl enable --now "$UNIT"
 echo
 systemctl --no-pager status "$UNIT" || true
 echo
-echo "done. verify the controls actually took:"
-echo "  python3 $REPO/src/vd.py preflight"
+echo "done. verify it is publishing:"
+echo "  $REPO/.venv/bin/python $REPO/src/vd.py nt | grep Vision"

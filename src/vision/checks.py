@@ -6,9 +6,17 @@ A check returns (status, name, detail). Statuses are PASS, FAIL and SKIP, and
 Checks take the facts dict rather than probing the system themselves, so the
 whole preflight costs one pass over the hardware and each check stays trivially
 readable.
+
+**Check outcomes, not settings.** The one check that was removed verified
+configuration rather than effect, and configuration here has a second owner:
+PhotonVision sets exposure, brightness and white balance when it opens the
+camera. It reported a failure on a control with no demonstrated effect while
+saying nothing about the setting that actually mattered. Every check below asks
+what the system is *doing*.
 """
 
 import math
+import os
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
@@ -39,41 +47,25 @@ def camera(cfg, f):
     return PASS, "camera", "%dx%d %s" % got
 
 
-def controls(cfg, f):
-    """Compare v4l2 controls against config, separating the ones we own.
+def identity(cfg, f):
+    """Is this the camera we calibrated?
 
-    PhotonVision sets exposure (and brightness) when it opens the camera and
-    wins that argument, so a mismatch there is informational. Nothing else
-    touches the rest - so a mismatch in those is a real fault, and usually means
-    a reboot or replug reverted them. Lumping the two together hid a genuine
-    failure behind an expected one.
+    Intrinsics belong to a specific physical camera. With two identical models
+    on the bench, swapping them silently invalidates the calibration and nothing
+    else would notice - the format, the framerate and the detections all look
+    perfect while every distance is wrong.
     """
-    wanted = cfg.get("camera", {}).get("controls") or []
-    if not wanted:
-        return SKIP, "controls", "none configured"
-    managed = set(cfg.get("camera", {}).get("photonvision_managed") or [])
-    got = f.get("controls", {})
-    ours, theirs = [], []
-    for item in wanted:
-        if isinstance(item, (list, tuple)) and len(item) == 2:
-            name, value = item
-        elif isinstance(item, dict):
-            name, value = next(iter(item.items()))
-        else:
-            continue
-        actual = got.get(name, {}).get("value")
-        if actual is None or str(actual) != str(value):
-            (theirs if name in managed else ours).append(
-                "%s=%s (want %s)" % (name, actual, value))
-    if ours:
-        detail = "; ".join(ours) + "  - run: vd apply"
-        if theirs:
-            detail += "   (also %d PhotonVision-managed: %s)" % (len(theirs), "; ".join(theirs))
-        return FAIL, "controls", detail
-    if theirs:
-        return PASS, "controls", ("%d match; %s set by PhotonVision, which owns them"
-                                  % (len(wanted) - len(theirs), "; ".join(theirs)))
-    return PASS, "controls", "%d match config" % len(wanted)
+    serial = cfg.get("camera", {}).get("serial")
+    if not serial:
+        return SKIP, "identity", "no camera.serial in config"
+    path = f.get("stable_path")
+    if not path:
+        return FAIL, "identity", ("no by-id path - cannot confirm which camera this "
+                                  "is, and device numbering moves on replug")
+    if serial not in path:
+        return FAIL, "identity", ("expected serial %s, connected camera is %s"
+                                  % (serial, os.path.basename(path)))
+    return PASS, "identity", serial
 
 
 def calibration(cfg, f):
@@ -100,6 +92,30 @@ def calibration(cfg, f):
     return PASS, "calibration", "HFOV %.1f deg" % hfov
 
 
+def calibration_resolution(cfg, f):
+    """Does the calibration cover the resolution actually running?
+
+    Intrinsics are in pixels and do not transfer between resolutions.
+    PhotonVision keeps one calibration per resolution and falls back to
+    estimating from the FOV setting when one is missing - which measured as a
+    0.65 deg systematic yaw error at 640x400, with nothing looking wrong.
+    """
+    c = f.get("calibration") or {}
+    size = c.get("image_size")
+    asked = f.get("asked")
+    if not c.get("path"):
+        return SKIP, "calibration_res", "no calibration to check"
+    if not size:
+        return SKIP, "calibration_res", "calibration file records no image size"
+    if not asked:
+        return SKIP, "calibration_res", "current format unknown"
+    if [asked["width"], asked["height"]] != list(size):
+        return FAIL, "calibration_res", (
+            "calibrated at %dx%d but running %dx%d - intrinsics do not transfer "
+            "between resolutions" % (size[0], size[1], asked["width"], asked["height"]))
+    return PASS, "calibration_res", "%dx%d" % (size[0], size[1])
+
+
 def service(cfg, f):
     if not cfg.get("preflight", {}).get("require_photonvision", True):
         return SKIP, "photonvision", "not required by config"
@@ -112,7 +128,11 @@ def service(cfg, f):
 
 
 def network(cfg, f=None):
-    """Connects to NetworkTables. The one check that touches the network."""
+    """Connects to NetworkTables. The one check that touches the network.
+
+    Returns several rows: the connection, the pipeline rate, and detections -
+    all outcome checks, and the last of them is the one that matters most.
+    """
     pf = cfg.get("preflight", {})
     if not pf.get("require_nt", True):
         return [(SKIP, "networktables", "not required by config")]
@@ -121,6 +141,7 @@ def network(cfg, f=None):
     if inst is None or err:
         return [(FAIL, "networktables", err or "no instance")]
     table = cfg.get("photonvision", {}).get("nt_table", "photonvision")
+    cam_name = cfg.get("photonvision", {}).get("camera_name")
     cams, topics = nt.watch(inst, table, seconds=1.5)
     live = {p: d for p, d in topics.items() if d["rate"] > 0}
     if not live:
@@ -130,21 +151,48 @@ def network(cfg, f=None):
     rows = [(PASS, "networktables",
              "%d topic(s) live, fastest %.0f Hz" % (len(live), fastest))]
 
-    if pf.get("require_detections", False):
-        ht = [(p, d) for p, d in topics.items() if p.endswith("/hasTarget")]
-        if not ht:
-            rows.append((SKIP, "detections", "no hasTarget topic published"))
-        elif str(ht[0][1]["value"]).lower() in ("true", "1"):
-            rows.append((PASS, "detections", "a tag is in view"))
-        else:
-            rows.append((FAIL, "detections", "hasTarget is %s" % ht[0][1]["value"]))
+    def value(suffix):
+        for p, d in topics.items():
+            if p.endswith("/" + suffix) and (not cam_name or p.startswith(cam_name + "/")):
+                return d["value"]
+        return None
+
+    # Pipeline rate. Nothing is broken at a low rate, but it is worth saying:
+    # framerate here is set by exposure, and exposure is set by the light.
+    fps_min = pf.get("min_fps")
+    fps = value("fps")
+    if fps is None:
+        rows.append((SKIP, "pipeline_fps", "no fps topic published"))
+    elif fps_min is None:
+        rows.append((PASS, "pipeline_fps", "%s fps" % fps))
+    elif float(fps) < float(fps_min):
+        rows.append((FAIL, "pipeline_fps",
+                     "%s fps, below the %s minimum - usually exposure, which is "
+                     "set by the available light" % (fps, fps_min)))
     else:
-        rows.append((SKIP, "detections", "not required by config"))
+        rows.append((PASS, "pipeline_fps", "%s fps" % fps))
+
+    # The headline. Everything else can pass while detection is silently dead:
+    # exposure drifting below the light's detection floor produces no error
+    # anywhere, just hasTarget going false.
+    ht = value("hasTarget")
+    if ht is None:
+        rows.append((SKIP, "detections", "no hasTarget topic published"))
+    elif not pf.get("require_detections", False):
+        rows.append((SKIP, "detections",
+                     "not required by config (hasTarget is %s)" % ht))
+    elif str(ht).lower() in ("true", "1"):
+        rows.append((PASS, "detections", "a tag is in view"))
+    else:
+        rows.append((FAIL, "detections",
+                     "hasTarget is false - no tag detected. If one is in view, "
+                     "exposure is probably below the detection floor for the "
+                     "current light"))
     return rows
 
 
 def run_all(cfg, f):
-    rows = [power(cfg, f), camera(cfg, f), controls(cfg, f),
-            calibration(cfg, f), service(cfg, f)]
+    rows = [power(cfg, f), camera(cfg, f), identity(cfg, f),
+            calibration(cfg, f), calibration_resolution(cfg, f), service(cfg, f)]
     rows.extend(network(cfg, f))
     return rows

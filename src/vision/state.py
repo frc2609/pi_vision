@@ -58,6 +58,13 @@ def calibration(cfg):
         if K:
             out["fx"], out["fy"] = round(float(K[0]), 2), round(float(K[4]), 2)
             out["cx"], out["cy"] = round(float(K[2]), 2), round(float(K[5]), 2)
+        # Intrinsics are in pixels and do not transfer between resolutions, so
+        # the size they were measured at is part of the calibration.
+        size = d.get("image_size") or d.get("resolution")
+        if isinstance(size, dict):
+            size = [size.get("width"), size.get("height")]
+        if isinstance(size, list) and len(size) == 2 and None not in size:
+            out["image_size"] = [int(size[0]), int(size[1])]
     except Exception as e:
         out["error"] = str(e)
     return out

@@ -46,7 +46,6 @@ camera/
 ├── scripts/
 │   └── install_service.sh        idempotent installer for the settings unit
 ├── services/
-│   ├── camera_settings.service   reapplies v4l2 controls at boot
 │   └── vision_preflight.service  publishes the go/no-go to NetworkTables
 ├── snapshots/                    dated config captures - commit the good ones
 ├── tests/                        parser tests; run anywhere, no Pi needed
@@ -183,29 +182,6 @@ hash and focal length, and hashes of PhotonVision's settings directory.
 
 Take one when things are known good and **commit it**. A snapshot from the last
 event is worth more than any amount of remembering.
-
-## `vd apply` and the systemd unit
-
-**v4l2 controls do not survive a reboot or a replug.** They live on the device,
-not on disk, and nothing announces that they have reverted to default.
-
-```bash
-python3 src/vd.py apply     # apply and verify now
-./scripts/install_service.sh             # apply at every boot
-```
-
-Two things make this less trivial than it looks. **Order matters** —
-`exposure_time_absolute` is inactive while `auto_exposure` is in an automatic
-mode, and a write to an inactive control is accepted and discarded, so manual
-mode is set first. And **a successful write proves nothing** — v4l2 reports
-success while clamping or ignoring the value, so every control is read back and
-compared.
-
-> **Honest limitation.** PhotonVision imposes its own pipeline settings when it
-> opens the camera. These values govern the window before PhotonVision starts
-> and any tool that uses the camera directly. Where PhotonVision owns the
-> camera, set exposure in its UI — this script cannot win that argument and does
-> not try.
 
 ## Known about this camera
 

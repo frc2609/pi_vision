@@ -6,7 +6,6 @@
     vd preflight     is the whole chain ready, yes or no?
     vd snapshot      capture the configuration; --diff says what changed
     vd tune          measure a configuration, or sweep several
-    vd apply         put the v4l2 controls from config back on the device
     vd stream        annotated live view, when the camera is free
     vd field         generate a two-tag corner field layout
 
@@ -421,49 +420,6 @@ def _show(r):
         print("    ! " + n)
 
 
-# --- apply ----------------------------------------------------------------
-
-def cmd_apply(cfg, args):
-    import time as _t
-    dev = device_from(cfg, args.device)
-    deadline = _t.time() + args.wait
-    while _t.time() < deadline and not cam.bus(dev):
-        _t.sleep(0.5)
-    if not cam.bus(dev):
-        print("no camera at %s after %.0fs" % (dev, args.wait))
-        return 2
-
-    wanted = []
-    for item in cfg.get("camera", {}).get("controls", []) or []:
-        if isinstance(item, (list, tuple)) and len(item) == 2:
-            wanted.append((str(item[0]), item[1]))
-        elif isinstance(item, dict):
-            wanted.extend((str(k), v) for k, v in item.items())
-    if not wanted:
-        print("no camera.controls in config - nothing to apply")
-        return 0
-
-    bad = []
-    for name, val in wanted:
-        # One at a time: batched with commas, one rejected control aborts the
-        # rest and you cannot tell which.
-        got, ok = cam.set_control(dev, name, val)
-        if not ok:
-            bad.append((name, val, got))
-        if not args.quiet:
-            print("  %-28s want %-6s got %-6s  %s" % (name, val, got, "ok" if ok else "MISMATCH"))
-    if bad:
-        print("%d control(s) did not take on %s" % (len(bad), dev))
-        for name, want, got in bad:
-            print("  %s: %s" % (name, "not present on this camera" if got is None
-                                else "wanted %s, device holds %s - clamped, or an auto "
-                                     "mode owns it" % (want, got)))
-        return 1
-    if not args.quiet:
-        print("all %d control(s) applied to %s" % (len(wanted), dev))
-    return 0
-
-
 # --- field ----------------------------------------------------------------
 
 def cmd_field(cfg, args):
@@ -539,11 +495,6 @@ def main():
     p.add_argument("--sweep-exposure", metavar="A,B,C")
     p.add_argument("--sweep-pipeline", metavar="A,B,C")
     p.set_defaults(fn=cmd_tune)
-
-    p = sub.add_parser("apply", help="apply v4l2 controls from config")
-    p.add_argument("--wait", type=float, default=20.0)
-    p.add_argument("--quiet", action="store_true")
-    p.set_defaults(fn=cmd_apply)
 
     p = sub.add_parser("stream", help="annotated live view")
     p.add_argument("--port", type=int, default=8090)

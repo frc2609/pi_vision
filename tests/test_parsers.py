@@ -175,50 +175,87 @@ class TestFieldLayout(unittest.TestCase):
 
 
 
-class TestControlsCheck(unittest.TestCase):
-    """A mismatch we own is a fault; one PhotonVision owns is information.
+class TestIdentityCheck(unittest.TestCase):
+    """Intrinsics belong to one physical camera.
 
-    Lumping them together hid a real failure - power_line_frequency reverting
-    after a reboot - behind an expected one.
+    With two identical models on the bench, a swap silently invalidates the
+    calibration - format, framerate and detections all still look perfect while
+    every distance is wrong.
     """
 
-    CFG = {"camera": {"controls": [["auto_exposure", 1],
-                                   ["exposure_time_absolute", 120],
-                                   ["power_line_frequency", 0]],
-                      "photonvision_managed": ["auto_exposure",
-                                               "exposure_time_absolute"]}}
+    CFG = {"camera": {"serial": "DCX-260513-K"}}
+    PATH = "/dev/v4l/by-id/usb-DCX-260513-K_Thrifty_01.00.00-video-index0"
 
-    def facts(self, **vals):
-        return {"controls": {k: {"value": str(v), "flags": ""} for k, v in vals.items()}}
-
-    def test_all_matching_passes(self):
-        s, _, _ = checks.controls(self.CFG, self.facts(
-            auto_exposure=1, exposure_time_absolute=120, power_line_frequency=0))
+    def test_matching_serial_passes(self):
+        s, _, _ = checks.identity(self.CFG, {"stable_path": self.PATH})
         self.assertEqual(s, checks.PASS)
 
-    def test_photonvision_managed_mismatch_is_not_a_failure(self):
-        s, _, detail = checks.controls(self.CFG, self.facts(
-            auto_exposure=1, exposure_time_absolute=323, power_line_frequency=0))
+    def test_different_camera_fails(self):
+        other = self.PATH.replace("DCX-260513-K", "DCX-999999-Z")
+        s, _, detail = checks.identity(self.CFG, {"stable_path": other})
+        self.assertEqual(s, checks.FAIL)
+        self.assertIn("DCX-999999-Z", detail)
+
+    def test_no_by_id_path_fails(self):
+        s, _, _ = checks.identity(self.CFG, {"stable_path": None})
+        self.assertEqual(s, checks.FAIL)
+
+    def test_no_serial_configured_skips(self):
+        s, _, _ = checks.identity({"camera": {}}, {"stable_path": self.PATH})
+        self.assertEqual(s, checks.SKIP)
+
+
+class TestCalibrationResolution(unittest.TestCase):
+    """Intrinsics are in pixels and do not transfer between resolutions.
+
+    Running 640x400 against a 1280x800 calibration measured as a 0.65 deg
+    systematic yaw error, with nothing looking wrong.
+    """
+
+    def facts(self, cal_size, w, h):
+        return {"calibration": {"path": "x.json", "image_size": cal_size},
+                "asked": {"width": w, "height": h, "fourcc": "MJPG"}}
+
+    def test_matching_resolution_passes(self):
+        s, _, _ = checks.calibration_resolution({}, self.facts([1280, 800], 1280, 800))
         self.assertEqual(s, checks.PASS)
-        self.assertIn("PhotonVision", detail)
 
-    def test_our_own_mismatch_is_a_failure(self):
-        s, _, detail = checks.controls(self.CFG, self.facts(
-            auto_exposure=1, exposure_time_absolute=120, power_line_frequency=2))
+    def test_mismatched_resolution_fails(self):
+        s, _, detail = checks.calibration_resolution({}, self.facts([1280, 800], 640, 400))
         self.assertEqual(s, checks.FAIL)
-        self.assertIn("vd apply", detail)
+        self.assertIn("do not transfer", detail)
 
-    def test_both_kinds_reports_ours_first(self):
-        s, _, detail = checks.controls(self.CFG, self.facts(
-            auto_exposure=1, exposure_time_absolute=323, power_line_frequency=2))
-        self.assertEqual(s, checks.FAIL)
-        self.assertLess(detail.index("power_line_frequency"),
-                        detail.index("exposure_time_absolute"))
+    def test_no_size_recorded_skips(self):
+        s, _, _ = checks.calibration_resolution({}, self.facts(None, 640, 400))
+        self.assertEqual(s, checks.SKIP)
 
-    def test_absent_control_counts_as_ours(self):
-        s, _, _ = checks.controls(self.CFG, self.facts(
-            auto_exposure=1, exposure_time_absolute=120))
+    def test_no_calibration_skips(self):
+        s, _, _ = checks.calibration_resolution(
+            {}, {"calibration": {"path": None}, "asked": None})
+        self.assertEqual(s, checks.SKIP)
+
+
+class TestCalibrationCheck(unittest.TestCase):
+    CFG = {"camera": {"expect": {"width": 1280}},
+           "calibration": {"expect_hfov_deg": 82.0, "tolerance_deg": 2.0}}
+
+    def test_good_calibration_passes(self):
+        s, _, _ = checks.calibration(
+            self.CFG, {"calibration": {"path": "x.json", "fx": 733.6}})
+        self.assertEqual(s, checks.PASS)
+
+    def test_negative_focal_length_is_a_diverged_solve(self):
+        # PhotonVision saved fx=-224 and displayed it as a 319 deg FOV.
+        s, _, detail = checks.calibration(
+            self.CFG, {"calibration": {"path": "x.json", "fx": -224.2}})
         self.assertEqual(s, checks.FAIL)
+        self.assertIn("diverged", detail)
+
+    def test_wrong_fov_fails(self):
+        s, _, _ = checks.calibration(
+            self.CFG, {"calibration": {"path": "x.json", "fx": 400.0}})
+        self.assertEqual(s, checks.FAIL)
+
 
 if __name__ == "__main__":
     unittest.main()

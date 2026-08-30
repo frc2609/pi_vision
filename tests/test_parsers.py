@@ -354,5 +354,67 @@ class TestCalibrationCheck(unittest.TestCase):
         self.assertEqual(r["status"], checks.SKIP)
 
 
+
+
+class TestUniformChecks(unittest.TestCase):
+    """Every camera must produce the same set of checks, always.
+
+    A conditional check publishes a topic that appears and disappears, which on
+    a dashboard is a widget that vanishes when things are fine. The two cameras
+    here are deliberately in different states.
+    """
+
+    EXPECTED = {"camera", "identity", "calibration", "calibration_res",
+                "publishing", "pipeline_fps", "detections"}
+
+    def rows_for(self, published, topics):
+        cams = [{"name": "front_left", "device": "/dev/video0"},
+                {"name": "rear", "device": "/dev/video2"}]
+        # network() is the only source of publishing/fps/detections.
+        import vision.checks as C
+        real_connect = C.__dict__.get("_test_hook")
+
+        class FakeNT:
+            PIPELINE_REQUEST = "pipelineIndexRequest"
+
+            @staticmethod
+            def connect(*a, **k):
+                return object(), None
+
+            @staticmethod
+            def watch(inst, table, seconds=1.5):
+                return published, topics
+
+        import sys
+        sys.modules["vision.nt_backup"] = sys.modules.get("vision.nt")
+        import vision.nt as realnt
+        saved = (realnt.connect, realnt.watch)
+        realnt.connect, realnt.watch = FakeNT.connect, FakeNT.watch
+        try:
+            return C.network({"preflight": {"min_fps": 10}}, cams)
+        finally:
+            realnt.connect, realnt.watch = saved
+
+    def test_both_cameras_report_the_same_checks(self):
+        topics = {"front_left/fps": {"rate": 1.0, "value": 30.0},
+                  "front_left/hasTarget": {"rate": 0.0, "value": True}}
+        rows = self.rows_for(["front_left"], topics)
+        by_cam = {}
+        for r in rows:
+            if r["camera"]:
+                by_cam.setdefault(r["camera"], set()).add(r["name"])
+        self.assertEqual(set(by_cam), {"front_left", "rear"})
+        for cam, names in by_cam.items():
+            self.assertEqual(names, {"publishing", "pipeline_fps", "detections"},
+                             "%s produced %s" % (cam, names))
+
+    def test_a_camera_that_is_not_publishing_still_reports_all_three(self):
+        rows = self.rows_for([], {})
+        names = {r["name"] for r in rows if r["camera"] == "rear"}
+        self.assertEqual(names, {"publishing", "pipeline_fps", "detections"})
+        statuses = {r["name"]: r["status"] for r in rows if r["camera"] == "rear"}
+        self.assertEqual(statuses["publishing"], checks.FAIL)
+        self.assertEqual(statuses["pipeline_fps"], checks.SKIP)
+
 if __name__ == "__main__":
     unittest.main()

@@ -109,7 +109,7 @@ needs no parsing:
 |---|---|
 | `ready` | the go/no-go light — every check on every camera |
 | `power_ok`, `photonvision_ok`, `networktables_ok`, `configured_ok`, `distinct_devices_ok` | machine-wide checks |
-| `<camera>/camera_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/calibration_res_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera |
+| `<camera>/camera_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/calibration_res_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera — **always all seven**, whatever state the camera is in |
 | `failed`, `skipped`, `cameras` | counts |
 | `seq` | increments every run |
 | `run_epoch_s` | when it last ran |
@@ -120,6 +120,12 @@ then drag these onto the layout. Green on `ready` means go.
 
 **A `SKIP` publishes as green**, because a check that could not run is not a
 failure. `skipped` tells you how many.
+
+> **Every camera always publishes all seven of its checks**, even when it is
+> not publishing to PhotonVision at all. A conditional check produces a topic
+> that appears and disappears, and on a dashboard that is a widget vanishing at
+> the moment something breaks. A check that cannot run reports SKIP; it never
+> goes missing.
 
 > **Two ways this can lie, and how each is handled.** If the publisher dies, NT4
 > unpublishes its topics, so the lights **vanish** from the dashboard rather

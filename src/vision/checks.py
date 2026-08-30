@@ -239,25 +239,43 @@ def network(cfg, cameras):
     table = cfg.get("photonvision", {}).get("nt_table", "photonvision")
     published, topics = nt.watch(inst, table, seconds=1.5)
     live = {p: d for p, d in topics.items() if d["rate"] > 0}
-    if not live:
-        return [finding(FAIL, "networktables",
+    if live:
+        fastest = max(live.values(), key=lambda d: d["rate"])["rate"]
+        rows = [finding(PASS, "networktables", "%d topic(s) live, fastest %.0f Hz"
+                        % (len(live), fastest))]
+    else:
+        # Deliberately not an early return: the per-camera checks below still
+        # have to be emitted, or every camera's dashboard widgets vanish at
+        # exactly the moment something has gone wrong.
+        rows = [finding(FAIL, "networktables",
                         "connected but nothing is updating under /%s" % table)]
-    fastest = max(live.values(), key=lambda d: d["rate"])["rate"]
-    rows = [finding(PASS, "networktables", "%d topic(s) live, fastest %.0f Hz"
-                    % (len(live), fastest))]
+        published = []
 
     for cam in cameras:
         name = cam["name"]
-        if name not in published:
+        # Every camera emits every check, always. A conditional check produces a
+        # topic that appears and disappears, which on a dashboard means a widget
+        # that vanishes when things are fine - so publishing reports PASS as
+        # well as FAIL, and the checks that depend on it SKIP rather than being
+        # omitted.
+        publishing = name in published
+        if publishing:
+            rows.append(finding(PASS, "publishing", "publishing to /%s/%s"
+                                % (table, name), name))
+        else:
             rows.append(finding(FAIL, "publishing",
                                 "not publishing under /%s - is the PhotonVision "
                                 "nickname '%s'? saw: %s"
                                 % (table, name, ", ".join(published) or "none"), name))
-            continue
 
         def value(suffix):
             d = topics.get("%s/%s" % (name, suffix))
             return d["value"] if d else None
+
+        if not publishing:
+            rows.append(finding(SKIP, "pipeline_fps", "camera not publishing", name))
+            rows.append(finding(SKIP, "detections", "camera not publishing", name))
+            continue
 
         fps, fps_min = value("fps"), pf.get("min_fps")
         if fps is None:

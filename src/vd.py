@@ -308,17 +308,39 @@ def cmd_preflight(cfg, args):
         return publish_preflight(cfg, args.interval, args.camera)
     cams, facts = gather(cfg, args.camera)
     rows = checks.run_all(cfg, cams, facts)
+
+    # Grouped by what the check is about. The network checks run last because
+    # they are slow, but reading them last splits each camera's results across
+    # two places - so ordering on screen is decided here, not by run order.
+    def group(name):
+        return [r for r in rows if r["camera"] == name]
+
     print()
-    for r in rows:
-        label = ("%s %s" % (r["camera"], r["name"])) if r["camera"] else r["name"]
-        print("  %-4s  %-28s %s" % (r["status"], label, r["detail"]))
-    fails = sum(1 for r in rows if r["status"] == checks.FAIL)
+    print("  system")
+    for r in group(None):
+        print("    %-4s  %-18s %s" % (r["status"], r["name"], r["detail"]))
+    for cam in cams:
+        rs = group(cam["name"])
+        if not rs:
+            continue
+        worst = ("FAIL" if any(r["status"] == checks.FAIL for r in rs) else "")
+        print("\n  %s%s" % (cam["name"], "   <- %d failing" % sum(
+            1 for r in rs if r["status"] == checks.FAIL) if worst else ""))
+        for r in rs:
+            print("    %-4s  %-18s %s" % (r["status"], r["name"], r["detail"]))
+
+    fails = [r for r in rows if r["status"] == checks.FAIL]
     skips = sum(1 for r in rows if r["status"] == checks.SKIP)
     print()
-    print("  NOT READY - %d check(s) failed%s" % (fails, ", %d skipped" % skips if skips else "")
-          if fails else "  READY%s" % (" (%d skipped)" % skips if skips else ""))
+    if fails:
+        print("  NOT READY - %d check(s) failed%s"
+              % (len(fails), ", %d skipped" % skips if skips else ""))
+        for r in fails:
+            print("    %s%s" % ("%s: " % r["camera"] if r["camera"] else "", r["name"]))
+    else:
+        print("  READY%s" % (" (%d skipped)" % skips if skips else ""))
     print()
-    return fails
+    return len(fails)
 
 
 # --- snapshot -------------------------------------------------------------

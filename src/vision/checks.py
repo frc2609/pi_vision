@@ -270,13 +270,20 @@ def network(cfg, cameras):
 
 
 def run_all(cfg, cameras, facts_by_camera):
-    """Global checks first, then per camera, then the network pass."""
+    """Every check, ordered so each camera's results end up together.
+
+    The network pass runs last because it is the slow one, but its per-camera
+    findings are folded back in beside that camera's other results - reading
+    them at the bottom would split each camera across two places.
+    """
     rows = [configured(cfg, cameras), power(cfg, facts_by_camera),
             service(cfg, facts_by_camera), unique_devices(cfg, cameras)]
+    net = network(cfg, cameras)
+    rows.extend(r for r in net if r["camera"] is None)
     for cam, f in zip(cameras, facts_by_camera):
         rows.append(camera_format(cfg, cam, f))
         rows.append(identity(cfg, cam, f))
         rows.append(calibration(cfg, cam, f))
         rows.append(calibration_resolution(cfg, cam, f))
-    rows.extend(network(cfg, cameras))
+        rows.extend(r for r in net if r["camera"] == cam["name"])
     return rows

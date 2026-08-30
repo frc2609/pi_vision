@@ -190,9 +190,20 @@ hash and focal length, and hashes of PhotonVision's settings directory.
 Take one when things are known good and **commit it**. A snapshot from the last
 event is worth more than any amount of remembering.
 
-## Known about this camera
+## Known about these cameras
 
-Findings from stages 1–4, recorded so nobody re-derives them:
+Findings from stages 1–5 and 10, recorded so nobody re-derives them:
+
+- **Two of them are indistinguishable over USB.** Both report
+  `DCX-260513-K / Thrifty / 01.00.00`, so `/dev/v4l/by-id/` holds one link for
+  both and the second to enumerate overwrites the first. Identify by `by_path`
+  (the physical USB port) and by a **label written on the camera in marker**.
+  Calibration filenames key to that label.
+- **A second camera costs about 3W and 10°C**, with the CPU at full boost and
+  the supply holding (`throttled_raw` stayed `0x0`).
+- **Set Stream Resolution low on every camera.** Left at full size, one
+  camera's dashboard stream ran at 6.31 Mbps against another's 0.35 Mbps. It
+  does not affect detection.
 
 - **Thriftiest Cam** — OV9281, 1MP mono global shutter, 1280x800 MJPEG at a
   measured 121 fps, USB 2.0, serial `DCX-260513-K`, HFOV 82°.

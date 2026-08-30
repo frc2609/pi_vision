@@ -114,12 +114,26 @@ needs no parsing:
 | `seq` | increments every run |
 | `run_epoch_s` | when it last ran |
 
-In [Elastic](https://frc-elastic.gitbook.io/docs), connect with **Custom** IP
-pointing at the Pi (PhotonVision runs the NT server while there is no roboRIO),
-then drag these onto the layout. Green on `ready` means go.
+Any NetworkTables dashboard can read these. With no roboRIO, point it at the
+Pi - PhotonVision runs the NT server. Green on `ready` means go.
+
+> **If your dashboard colours booleans automatically, check the polarity.** The
+> `*_ok` topics here are true-is-good, but the health monitor's fault flags
+> (`undervoltage_*`, `throttled_*`, `usb_over_current`) are true-is-bad. A
+> dashboard that paints false red will show a wall of red meaning "everything is
+> fine", which trains people to ignore red. Either invert those widgets or show
+> `throttled_raw` instead - one number, `0x0` is clean, no polarity to get
+> wrong.
 
 **A `SKIP` publishes as green**, because a check that could not run is not a
-failure. `skipped` tells you how many.
+failure. `skipped` tells you how many. Anything the system is genuinely
+*missing* fails instead - an uncalibrated camera is a FAIL, not a skip.
+
+**Stream bandwidth is worth a thought here too.** A camera whose Stream
+Resolution is left at full size published 6.31 Mbps against another's 0.35 Mbps
+at 320x200 - eighteen times the traffic for a picture a human glances at, and
+FRC has historically capped total bandwidth near 4 Mbps. Stream resolution does
+not affect detection; set it low on every camera.
 
 > **Every camera always publishes all seven of its checks**, even when it is
 > not publishing to PhotonVision at all. A conditional check produces a topic

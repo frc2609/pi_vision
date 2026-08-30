@@ -3,11 +3,11 @@
 Camera-side tooling for the vision coprocessor: diagnostics at every layer,
 calibration artefacts, and PhotonVision configuration.
 
-> **Not yet a git repo.** The [operating standards](../docs/operating_standards.md)
-> say each component under `vision/` gets its own repository and remote. This
-> directory is gitignored by the `vision/` repo so it can be initialised later
-> without its contents being swallowed into that history. Until someone runs
-> `git init` and adds a remote, **nothing in here is backed up.**
+> **No remote yet.** The [operating standards](../docs/operating_standards.md)
+> say each component under `vision/` gets its own repository *and its own
+> GitHub remote*. This is a local git repo — `camera/` is gitignored by the
+> `vision/` repo so its contents stay out of that history — but **until a remote
+> exists, one dead SD card or laptop still loses everything.**
 
 ## The idea
 
@@ -17,12 +17,13 @@ monitor covers the Pi. These cover everything above it:
 | Layer | Tool | Answers |
 |---|---|---|
 | Pi power and thermals | `monitor/` (separate repo) | is the Pi healthy |
-| Camera hardware | `camera_doctor.py` | is the camera delivering what we asked for |
-| Detection output | `pipeline_doctor.py` | is PhotonVision publishing anything useful |
-| Whole chain | `preflight.py` | is it ready, right now, yes or no |
-| Change over time | `config_snapshot.py` | what is different from when it worked |
+| Camera hardware | `vd doctor` | is the camera delivering what we asked for |
+| Detection output | `vd nt` | is PhotonVision publishing anything useful |
+| Whole chain | `vd preflight` | is it ready, right now, yes or no |
+| Change over time | `vd snapshot --diff` | what is different from when it worked |
+| Choosing settings | `vd tune` | measurement instead of opinion |
 
-Every tool is config-driven, exits non-zero on trouble, and fails soft: a probe
+Every command is config-driven, exits non-zero on trouble, and fails soft: a probe
 that cannot run reports `--` and says why, rather than raising.
 
 **[`docs/RUNNING.md`](docs/RUNNING.md) is the one to read** — how to run each
@@ -37,24 +38,34 @@ camera/
 ├── README.md
 ├── requirements.txt
 ├── config/
-│   ├── config.yaml               device paths, expected format, controls, NT mode
-│   └── field_layout_corner.json  two-tag mini-field for multi-tag testing
+│   ├── config.yaml               device, expected format, controls, NT mode
+│   ├── field_layout_corner.json  two-tag mini-field for multi-tag testing
+│   └── photonvision-calibration-*.json
 ├── docs/
-│   └── RUNNING.md                how to run the tools and read their output
+│   └── RUNNING.md                how to run vd and read its output
 ├── scripts/
 │   └── install_service.sh        idempotent installer for the settings unit
 ├── services/
 │   └── camera_settings.service   reapplies v4l2 controls at boot
 ├── snapshots/                    dated config captures - commit the good ones
+├── tests/                        parser tests; run anywhere, no Pi needed
 └── src/
-    ├── common.py                 shared helpers; the one place a failure becomes None
-    ├── camera_doctor.py          camera diagnostics and a live annotated stream
-    ├── pipeline_doctor.py        NetworkTables diagnostics
-    ├── config_snapshot.py        capture and diff the whole configuration
-    ├── apply_camera_settings.py  apply the controls from config, then verify
-    ├── make_field_layout.py      generate a two-tag corner field layout
-    └── preflight.py              one pass/fail for the whole chain
+    ├── vd.py                     the CLI - all presentation lives here
+    └── vision/                   library - reads and writes state, never prints
+        ├── util.py               shell, config, device resolution
+        ├── camera.py             v4l2: parsers, formats, controls, exposure, probe
+        ├── nt.py                 NetworkTables: connect, discover, sample rates
+        ├── state.py              one facts dict; snapshots and diffs
+        ├── checks.py             preflight checks over the facts
+        ├── tune.py               measurement and sweep statistics
+        ├── stream.py             annotated MJPEG view
+        └── field.py              corner field-layout geometry
 ```
+
+**One state model, several views.** `state.facts()` gathers what is true once;
+the human report, `--json`, the saved snapshot and the preflight checks are all
+views onto it rather than four implementations of "look at the camera". Parsers
+take text and return data, which is what makes `tests/` possible without a Pi.
 
 ## Setup
 
@@ -74,28 +85,28 @@ python3 -m venv --system-site-packages .venv   # so apt's OpenCV stays visible
 **OpenCV must come from apt.** The apt build includes contrib, and `cv2.aruco`
 lives in contrib. See [operating standards §4](../docs/operating_standards.md).
 
-## `preflight.py` — start here
+## `vd preflight` — start here
 
 ```bash
-python3 src/preflight.py; echo "exit $?"
+python3 src/vd.py preflight; echo "exit $?"
 ```
 
 Checks power, camera presence and format, v4l2 controls, calibration, the
 PhotonVision service, and whether anything is actually publishing to
 NetworkTables. Exit code is the number of failed checks, so
-`preflight.py && echo ready` works in a script.
+`vd preflight && echo ready` works in a script.
 
 A `SKIP` is never a failure — it means the check could not run and says why.
 
-## `camera_doctor.py`
+## `vd doctor`
 
 Answers "is the camera doing what I think it is", which is a different question
 from the monitor's "is the Pi healthy".
 
 ```bash
-sudo python3 src/camera_doctor.py          # sudo to see which process holds the camera
-python3 src/camera_doctor.py --json        # machine-readable
-python3 src/camera_doctor.py --stream      # annotated live view on :8090
+sudo python3 src/vd.py doctor          # sudo to see which process holds the camera
+python3 src/vd.py doctor --json        # machine-readable
+python3 src/vd.py stream               # annotated live view on :8090
 ```
 
 The report is built around three columns that should agree and often do not:
@@ -118,20 +129,20 @@ camera format one-liner.
 **Only one process can hold a V4L2 capture device.** When PhotonVision is
 running it owns the camera, so the measured column is skipped, the holding
 process is named, and you are pointed at PhotonVision's own stream instead. To
-use `--stream`, stop PhotonVision first.
+use `vd stream`, stop PhotonVision first.
 
 Exit codes: `0` at its best mode, `1` running below what the hardware
 advertises, `2` no device.
 
-## `pipeline_doctor.py`
+## `vd nt`
 
 The layer nothing else watches. The monitor says the service is alive;
-`camera_doctor` says frames are arriving; neither says whether detections are
+`vd doctor` says frames are arriving; neither says whether detections are
 reaching the network.
 
 ```bash
-.venv/bin/python src/pipeline_doctor.py            # 3s sample
-.venv/bin/python src/pipeline_doctor.py --all      # every topic, not just known ones
+.venv/bin/python src/vd.py nt            # 3s sample
+.venv/bin/python src/vd.py nt --all      # every topic, not just known ones
 ```
 
 It enumerates whatever PhotonVision publishes and measures each topic's update
@@ -146,16 +157,16 @@ exists, the roboRIO is the server: switch to `client_team`.
 Exit codes: `0` publishing, `1` connected but nothing updating, `2` no
 connection.
 
-## `config_snapshot.py`
+## `vd snapshot`
 
 Answers **"it worked yesterday — what changed?"**, which is the hardest question
 to answer from memory, because the things that change are the things nobody
 thinks of as state.
 
 ```bash
-sudo python3 src/config_snapshot.py          # capture (sudo to read PV's settings)
-python3 src/config_snapshot.py --diff        # newest two
-python3 src/config_snapshot.py --list
+sudo python3 src/vd.py snapshot          # capture (sudo to read PV's settings)
+python3 src/vd.py snapshot --diff        # newest two
+python3 src/vd.py snapshot --list
 ```
 
 Captures kernel and package versions, service states, the USB device, the full
@@ -165,13 +176,13 @@ hash and focal length, and hashes of PhotonVision's settings directory.
 Take one when things are known good and **commit it**. A snapshot from the last
 event is worth more than any amount of remembering.
 
-## `apply_camera_settings.py` and the systemd unit
+## `vd apply` and the systemd unit
 
 **v4l2 controls do not survive a reboot or a replug.** They live on the device,
 not on disk, and nothing announces that they have reverted to default.
 
 ```bash
-python3 src/apply_camera_settings.py     # apply and verify now
+python3 src/vd.py apply     # apply and verify now
 ./scripts/install_service.sh             # apply at every boot
 ```
 

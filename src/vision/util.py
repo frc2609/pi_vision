@@ -1,9 +1,8 @@
-"""Shared helpers for the camera tools.
+"""Shell access, config loading, and device resolution.
 
-Deliberately small. Anything that shells out lives here so there is one place
-where "a command failed" is turned into None instead of an exception - these are
-diagnostics, and a diagnostic that crashes when one reading is unavailable is
-worse than no diagnostic.
+The one place where "a command failed" becomes None instead of an exception.
+These are diagnostics: a tool that dies because one reading is unavailable is
+worse than no tool.
 """
 
 import os
@@ -16,7 +15,7 @@ def sh(args, timeout=8):
     """Run a command; return combined output as text, or None if it could not run.
 
     Some tools write useful output and still exit non-zero, so the return code
-    is deliberately not checked here.
+    is deliberately not checked.
     """
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
@@ -26,7 +25,7 @@ def sh(args, timeout=8):
 
 
 def repo_root():
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def config_path(explicit=None):
@@ -45,7 +44,7 @@ def load_config(explicit=None):
     try:
         import yaml
     except ImportError:
-        return None, "PyYAML not installed (apt install python3-yaml)"
+        return None, "PyYAML not installed (sudo apt install python3-yaml)"
     try:
         with open(path) as f:
             return yaml.safe_load(f) or {}, None
@@ -70,23 +69,14 @@ def device_from(cfg, override=None):
     return cam.get("fallback", "/dev/video0")
 
 
-def service_state(name):
-    out = sh(["systemctl", "is-active", name])
-    return out.strip() if out else None
-
-
-def throttled():
-    """(raw_int, text) from vcgencmd, or (None, None) off a Pi."""
-    out = sh(["vcgencmd", "get_throttled"])
-    if not out or "=" not in out:
-        return None, None
-    try:
-        raw = int(out.split("=")[1].strip(), 16)
-    except ValueError:
-        return None, None
-    bits = {0: "under-voltage now", 1: "arm freq capped now", 2: "throttled now",
-            3: "soft temp limit now", 16: "under-voltage has occurred",
-            17: "arm freq capped has occurred", 18: "throttling has occurred",
-            19: "soft temp limit has occurred"}
-    hits = [t for b, t in bits.items() if raw & (1 << b)]
-    return raw, "; ".join(hits) if hits else "clean"
+def find_file(cfg, name):
+    """Locate a configured file, checking the repo and the Pi's working dir."""
+    if not name:
+        return None
+    for cand in (name,
+                 os.path.join(repo_root(), name),
+                 os.path.join(repo_root(), "config", os.path.basename(name)),
+                 os.path.expanduser("~/vision/calib/" + os.path.basename(name))):
+        if os.path.exists(cand):
+            return cand
+    return None

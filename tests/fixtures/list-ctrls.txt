@@ -1,0 +1,11 @@
+User Controls
+
+                     brightness 0x00980900 (int)    : min=-64 max=64 step=1 default=0 value=-64 flags=has-min-max
+        white_balance_automatic 0x0098090c (bool)   : default=1 value=0
+      white_balance_temperature 0x0098091a (int)    : min=2800 max=6500 step=1 default=4600 value=4000 flags=inactive, has-min-max
+
+Camera Controls
+
+                  auto_exposure 0x009a0901 (menu)   : min=0 max=3 default=3 value=1 (Manual Mode)
+         exposure_time_absolute 0x009a0902 (int)    : min=1 max=5000 step=1 default=1 value=323 flags=has-min-max
+                 focus_absolute 0x009a090a (int)    : min=0 max=1023 step=1 default=0 value=0 flags=inactive, has-min-max

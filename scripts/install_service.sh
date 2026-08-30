@@ -30,9 +30,9 @@ python3 -c 'import yaml' 2>/dev/null || {
   echo "missing PyYAML - sudo apt install -y python3-yaml"; exit 1; }
 
 echo "checking the config applies cleanly before installing..."
-if ! python3 "$REPO/src/apply_camera_settings.py" --wait 5; then
+if ! python3 "$REPO/src/vd.py" apply --wait 5; then
   echo
-  echo "apply_camera_settings.py did not succeed. Installing anyway - a camera"
+  echo "vd apply did not succeed. Installing anyway - a camera"
   echo "that is absent right now is a fine reason to fail, and the unit waits"
   echo "for it at boot. Re-run this script once the camera is connected if you"
   echo "want the check to pass."
@@ -52,4 +52,4 @@ echo
 systemctl --no-pager status "$UNIT" || true
 echo
 echo "done. verify the controls actually took:"
-echo "  python3 $REPO/src/preflight.py"
+echo "  python3 $REPO/src/vd.py preflight"

@@ -17,7 +17,7 @@ WorkingDirectory=/home/admin/vision/camera
 # The script waits for USB enumeration itself rather than depending on a
 # .device unit, which does not exist until udev has seen the camera and would
 # make this unit fail on a boot where the camera is unplugged.
-ExecStart=/usr/bin/python3 /home/admin/vision/camera/src/apply_camera_settings.py --wait 30
+ExecStart=/usr/bin/python3 /home/admin/vision/camera/src/vd.py apply --wait 30
 # A camera that is absent at boot is worth recording, not worth failing over -
 # the same reasoning as the health monitor not depending on the network.
 SuccessExitStatus=0 2

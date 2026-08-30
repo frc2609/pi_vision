@@ -154,72 +154,66 @@ def identity(cfg, cam, f):
 
 
 def calibration(cfg, cam, f):
-    """A configured camera with no calibration is not ready - it FAILS.
+    """Is there a calibration, is it sane, and does it apply to what is running?
 
-    An earlier version made "not configured" a SKIP, which publishes green: an
-    uncalibrated camera showed two reassuring lights on the dashboard. A check
-    that cannot run is a SKIP; a camera that is missing something it needs is a
-    failure. Set `calibration.required: false` while bringing one up.
+    One check rather than two. A separate resolution check could only ever be
+    informative when a calibration existed, and its failure *is* a calibration
+    failure - so it was a second light that lit for the same problem, or skipped.
+
+    Three ways this fails, in the order they are worth knowing:
+
+    - **Missing.** A configured camera without a calibration is not ready. An
+      earlier version made this a SKIP, which publishes green - an uncalibrated
+      camera showed a reassuring light. Use `calibration.required: false` while
+      bringing one up.
+    - **Diverged.** A negative focal length is a mirrored solve, not a bad
+      calibration. PhotonVision saves and displays those rather than rejecting
+      them; we saw fx = -224 presented as a 319 degree field of view.
+    - **Wrong resolution.** Intrinsics are in pixels and do not transfer.
+      PhotonVision keeps one calibration per resolution and estimates from the
+      FOV setting when one is missing, which measured as 0.65 degrees of
+      systematic yaw error at 640x400 with nothing looking wrong.
     """
     name = cam["name"]
     c = f.get("calibration") or {}
     required = cam.get("calibration", {}).get("required", True)
+
     if not c.get("path"):
         if not required:
-            return finding(SKIP, "calibration",
-                           "%s (calibration.required is false)"
+            return finding(SKIP, "calibration", "%s (calibration.required is false)"
                            % c.get("error", "not found"), name)
         if c.get("error") == "not configured":
-            return finding(FAIL, "calibration",
-                           "no calibration - calibrate it in PhotonVision, then "
-                           "set calibration.file", name)
+            return finding(FAIL, "calibration", "no calibration - calibrate it in "
+                           "PhotonVision, then set calibration.file", name)
         return finding(FAIL, "calibration", c.get("error", "not found"), name)
+
     fx = c.get("fx")
     if fx is None:
         return finding(FAIL, "calibration", "no intrinsics in %s" % c["path"], name)
     if fx <= 0:
-        # A negative focal length is a mirrored solve, not a bad calibration.
         return finding(FAIL, "calibration",
                        "fx=%.1f - negative focal length means a diverged solve" % fx, name)
-    width = cam.get("expect", {}).get("width")
-    if not width:
-        return finding(PASS, "calibration", "fx=%.1f" % fx, name)
-    hfov = 2 * math.degrees(math.atan(width / (2 * fx)))
-    cal = cam.get("calibration", {})
-    want, tol = cal.get("expect_hfov_deg"), cal.get("tolerance_deg", 2.0)
-    if want is None:
-        return finding(PASS, "calibration", "fx=%.1f, HFOV %.1f deg" % (fx, hfov), name)
-    if abs(hfov - want) > tol:
-        return finding(FAIL, "calibration", "HFOV %.1f deg, expected %.1f +/- %.1f"
-                       % (hfov, want, tol), name)
-    return finding(PASS, "calibration", "HFOV %.1f deg" % hfov, name)
 
-
-def calibration_resolution(cfg, cam, f):
-    """Does the calibration cover the resolution actually running?
-
-    Intrinsics are in pixels and do not transfer between resolutions.
-    PhotonVision keeps one per resolution and falls back to estimating from the
-    FOV setting when one is missing - which measured as 0.65 deg of systematic
-    yaw error at 640x400, with nothing looking wrong.
-    """
-    name = cam["name"]
-    c = f.get("calibration") or {}
-    size, asked = c.get("image_size"), f.get("asked")
-    if not c.get("path"):
-        # The calibration check already reports this as a failure; repeating it
-        # here would just double-count one problem.
-        return finding(SKIP, "calibration_res", "no calibration - see above", name)
-    if not size:
-        return finding(SKIP, "calibration_res", "calibration records no image size", name)
-    if not asked:
-        return finding(SKIP, "calibration_res", "current format unknown", name)
-    if [asked["width"], asked["height"]] != list(size):
-        return finding(FAIL, "calibration_res",
+    asked, size = f.get("asked"), c.get("image_size")
+    at = ""
+    if size and asked and [asked["width"], asked["height"]] != list(size):
+        return finding(FAIL, "calibration",
                        "calibrated at %dx%d but running %dx%d - intrinsics do not "
                        "transfer between resolutions"
                        % (size[0], size[1], asked["width"], asked["height"]), name)
-    return finding(PASS, "calibration_res", "%dx%d" % (size[0], size[1]), name)
+    if size:
+        at = " @ %dx%d" % (size[0], size[1])
+
+    width = cam.get("expect", {}).get("width")
+    if not width:
+        return finding(PASS, "calibration", "fx=%.1f%s" % (fx, at), name)
+    hfov = 2 * math.degrees(math.atan(width / (2 * fx)))
+    cal = cam.get("calibration", {})
+    want, tol = cal.get("expect_hfov_deg"), cal.get("tolerance_deg", 2.0)
+    if want is not None and abs(hfov - want) > tol:
+        return finding(FAIL, "calibration", "HFOV %.1f deg, expected %.1f +/- %.1f"
+                       % (hfov, want, tol), name)
+    return finding(PASS, "calibration", "HFOV %.1f deg%s" % (hfov, at), name)
 
 
 # --- network, per camera --------------------------------------------------
@@ -324,6 +318,5 @@ def run_all(cfg, cameras, facts_by_camera):
         rows.append(camera_format(cfg, cam, f))
         rows.append(identity(cfg, cam, f))
         rows.append(calibration(cfg, cam, f))
-        rows.append(calibration_resolution(cfg, cam, f))
         rows.extend(r for r in net if r["camera"] == cam["name"])
     return rows

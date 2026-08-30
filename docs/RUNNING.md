@@ -109,7 +109,7 @@ needs no parsing:
 |---|---|
 | `ready` | the go/no-go light — every check on every camera |
 | `power_ok`, `photonvision_ok`, `networktables_ok`, `configured_ok`, `distinct_devices_ok` | machine-wide checks |
-| `<camera>/camera_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/calibration_res_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera — **always all seven**, whatever state the camera is in |
+| `<camera>/camera_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera — **always all six**, whatever state the camera is in |
 | `failed`, `skipped`, `cameras` | counts |
 | `seq` | increments every run |
 | `run_epoch_s` | when it last ran |

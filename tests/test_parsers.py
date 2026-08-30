@@ -294,36 +294,33 @@ class TestDistinctDevices(unittest.TestCase):
         self.assertEqual(r["status"], checks.SKIP)
 
 
-class TestCalibrationResolution(unittest.TestCase):
-    """Intrinsics are in pixels and do not transfer between resolutions.
+class TestCalibrationCheck(unittest.TestCase):
+    """One check: present, sane, and for the resolution actually running."""
 
-    Running 640x400 against a 1280x800 calibration measured as a 0.65 deg
-    systematic yaw error, with nothing looking wrong.
-    """
+    CAM = {"name": "front_left", "expect": {"width": 1280},
+           "calibration": {"expect_hfov_deg": 82.0, "tolerance_deg": 2.0}}
 
-    CAM = {"name": "front_left"}
+    def cal(self, **kw):
+        base = {"path": "x.json", "fx": 733.6, "image_size": [1280, 800]}
+        base.update(kw)
+        return {"calibration": base, "asked": {"width": 1280, "height": 800}}
 
-    def facts(self, cal_size, w, h):
-        return {"calibration": {"path": "x.json", "image_size": cal_size},
-                "asked": {"width": w, "height": h, "fourcc": "MJPG"}}
-
-    def test_matching_resolution_passes(self):
-        r = checks.calibration_resolution({}, self.CAM, self.facts([1280, 800], 1280, 800))
-        self.assertEqual(r["status"], checks.PASS)
-
-    def test_mismatched_resolution_fails(self):
-        r = checks.calibration_resolution({}, self.CAM, self.facts([1280, 800], 640, 400))
+    def test_resolution_mismatch_fails(self):
+        f = self.cal()
+        f["asked"] = {"width": 640, "height": 400}
+        r = checks.calibration({}, self.CAM, f)
         self.assertEqual(r["status"], checks.FAIL)
         self.assertIn("do not transfer", r["detail"])
 
-    def test_no_size_recorded_skips(self):
-        r = checks.calibration_resolution({}, self.CAM, self.facts(None, 640, 400))
-        self.assertEqual(r["status"], checks.SKIP)
+    def test_pass_reports_the_resolution_it_applies_to(self):
+        r = checks.calibration({}, self.CAM, self.cal())
+        self.assertEqual(r["status"], checks.PASS)
+        self.assertIn("1280x800", r["detail"])
 
-
-class TestCalibrationCheck(unittest.TestCase):
-    CAM = {"name": "front_left", "expect": {"width": 1280},
-           "calibration": {"expect_hfov_deg": 82.0, "tolerance_deg": 2.0}}
+    def test_no_recorded_size_still_passes(self):
+        f = self.cal()
+        del f["calibration"]["image_size"]
+        self.assertEqual(checks.calibration({}, self.CAM, f)["status"], checks.PASS)
 
     def test_good_calibration_passes(self):
         r = checks.calibration({}, self.CAM, {"calibration": {"path": "x.json", "fx": 733.6}})
@@ -364,7 +361,7 @@ class TestUniformChecks(unittest.TestCase):
     here are deliberately in different states.
     """
 
-    EXPECTED = {"camera", "identity", "calibration", "calibration_res",
+    EXPECTED = {"camera", "identity", "calibration",
                 "publishing", "pipeline_fps", "detections"}
 
     def rows_for(self, published, topics):

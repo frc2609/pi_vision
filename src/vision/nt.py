@@ -38,7 +38,12 @@ PIPELINE_STATE = "pipelineIndexState"
 
 
 def connect(nt_cfg, timeout=5.0):
-    """Bring up an NT client (or server) per config. Returns (inst, error)."""
+    """Bring up an NT client (or server) per config. Returns (inst, error).
+
+    Idempotent: calling it again on an already-connected instance returns the
+    existing one. That matters because a long-lived publisher connects once and
+    then runs checks that would otherwise try to connect again.
+    """
     global _SUBSCRIPTION
     try:
         from ntcore import NetworkTableInstance, MultiSubscriber
@@ -47,6 +52,8 @@ def connect(nt_cfg, timeout=5.0):
                       "packaged in Debian - so it needs a venv. See requirements.txt")
 
     inst = NetworkTableInstance.getDefault()
+    if _SUBSCRIPTION is not None and inst.isConnected():
+        return inst, None
     mode = (nt_cfg or {}).get("mode", "client_address")
     identity = (nt_cfg or {}).get("identity", "camera_tools")
 

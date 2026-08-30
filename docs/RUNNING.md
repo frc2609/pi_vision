@@ -88,6 +88,39 @@ Exit code is the number of failed checks.
 
 **`SKIP` is never a failure.** It means the check could not run, and says why.
 
+### Publishing a go/no-go to the driver station
+
+```bash
+.venv/bin/python src/vd.py preflight --publish --interval 30
+sudo cp services/vision_preflight.service /etc/systemd/system/
+sudo systemctl enable --now vision_preflight
+```
+
+Publishes to **`/Vision/preflight`**, booleans and numbers only so it graphs and
+needs no parsing:
+
+| Topic | |
+|---|---|
+| `ready` | the go/no-go light |
+| `power_ok`, `camera_ok`, `controls_ok`, `calibration_ok`, `photonvision_ok`, `networktables_ok` | per-check indicators |
+| `failed`, `skipped` | counts |
+| `seq` | increments every run |
+| `run_epoch_s` | when it last ran |
+
+In [Elastic](https://frc-elastic.gitbook.io/docs), connect with **Custom** IP
+pointing at the Pi (PhotonVision runs the NT server while there is no roboRIO),
+then drag these onto the layout. Green on `ready` means go.
+
+**A `SKIP` publishes as green**, because a check that could not run is not a
+failure. `skipped` tells you how many.
+
+> **Two ways this can lie, and how each is handled.** If the publisher dies, NT4
+> unpublishes its topics, so the lights **vanish** from the dashboard rather
+> than freezing green - that is why this runs as a long-lived service rather
+> than a timer firing a one-shot. And if it wedges while still connected, the
+> topics stay but `seq` stops advancing: put `seq` on a graph widget and a flat
+> line is the tell. A stale green light is the failure mode worth designing out.
+
 ---
 
 ## `vd doctor` — is the camera delivering what we asked for

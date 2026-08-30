@@ -46,7 +46,8 @@ camera/
 ├── scripts/
 │   └── install_service.sh        idempotent installer for the settings unit
 ├── services/
-│   └── camera_settings.service   reapplies v4l2 controls at boot
+│   ├── camera_settings.service   reapplies v4l2 controls at boot
+│   └── vision_preflight.service  publishes the go/no-go to NetworkTables
 ├── snapshots/                    dated config captures - commit the good ones
 ├── tests/                        parser tests; run anywhere, no Pi needed
 └── src/
@@ -97,6 +98,13 @@ NetworkTables. Exit code is the number of failed checks, so
 `vd preflight && echo ready` works in a script.
 
 A `SKIP` is never a failure — it means the check could not run and says why.
+
+**For the driver station:** `vd preflight --publish` publishes the verdict to
+`/Vision/preflight` as booleans and numbers, so [Elastic](https://frc-elastic.gitbook.io/docs)
+gets a go/no-go light and per-check indicators. Install
+`services/vision_preflight.service` to run it continuously. It is a long-lived
+publisher on purpose: NT4 unpublishes a client's topics when it disconnects, so
+if it dies the lights **vanish** rather than freezing green.
 
 ## `vd doctor`
 

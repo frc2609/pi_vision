@@ -1,0 +1,23 @@
+[Unit]
+Description=Publish the vision preflight verdict to NetworkTables
+Documentation=file:///home/admin/vision/camera/docs/RUNNING.md
+# Deliberately not ordered against photonvision. A preflight that only starts
+# once PhotonVision is up cannot report that PhotonVision is down, which is the
+# case a driver most needs to see.
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/vision/camera
+# The venv, not system python: publishing needs pyntcore.
+ExecStart=/home/admin/vision/camera/.venv/bin/python /home/admin/vision/camera/src/vd.py preflight --publish --interval 30
+Restart=on-failure
+RestartSec=5
+# systemd's default gives up after 5 restarts in 10 seconds, which would retire
+# this during exactly the churn it exists to report on.
+StartLimitIntervalSec=0
+# Long-lived on purpose: NT4 unpublishes a client's topics when it disconnects,
+# so if this dies the dashboard lights vanish rather than freezing green.
+
+[Install]
+WantedBy=multi-user.target

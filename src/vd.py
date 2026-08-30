@@ -225,8 +225,60 @@ def cmd_nt(cfg, args):
 
 # --- preflight ------------------------------------------------------------
 
+def publish_preflight(cfg, dev, interval):
+    """Publish the preflight verdict to NetworkTables for a dashboard.
+
+    Booleans and numbers only, per the operating standards - a formatted string
+    does not graph and cannot be consumed without parsing.
+
+    Runs as a long-lived publisher on purpose. NT4 unpublishes a client's topics
+    when it disconnects, so **if this process dies the lights disappear from the
+    dashboard** rather than freezing on their last good values. A stale green
+    light is the failure mode worth designing out.
+    """
+    import time as _t
+    from vision import nt as _nt
+
+    inst, err = nt.connect(cfg.get("networktables"),
+                           cfg.get("preflight", {}).get("nt_timeout_s", 5.0))
+    if inst is None or err:
+        print("networktables: %s" % (err or "no instance"))
+        return 2
+
+    table = inst.getTable("Vision/preflight")
+    seq = 0
+    print("publishing to /Vision/preflight every %.0fs (ctrl-C to stop)" % interval)
+    try:
+        while True:
+            f = state.facts(cfg, dev, probe=False)
+            rows = checks.run_all(cfg, f)
+            fails = sum(1 for s, _, _ in rows if s == checks.FAIL)
+            skips = sum(1 for s, _, _ in rows if s == checks.SKIP)
+            for status, name, _ in rows:
+                # SKIP is never a failure, so it shows green. `skipped` says how
+                # many checks could not run.
+                table.getEntry("%s_ok" % name).setBoolean(status != checks.FAIL)
+            table.getEntry("ready").setBoolean(fails == 0)
+            table.getEntry("failed").setDouble(float(fails))
+            table.getEntry("skipped").setDouble(float(skips))
+            seq += 1
+            # A flat `seq` on a graph means this publisher is wedged but still
+            # connected - the one failure the vanishing-topics trick misses.
+            table.getEntry("seq").setDouble(float(seq))
+            table.getEntry("run_epoch_s").setDouble(_t.time())
+            inst.flush()
+            if interval <= 0:
+                _t.sleep(1.0)          # let the values reach the server
+                return 0 if fails == 0 else fails
+            _t.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_preflight(cfg, args):
     dev = device_from(cfg, args.device)
+    if args.publish:
+        return publish_preflight(cfg, dev, args.interval)
     f = state.facts(cfg, dev, probe=False)
     rows = checks.run_all(cfg, f)
     print()
@@ -467,6 +519,10 @@ def main():
     p.set_defaults(fn=cmd_nt)
 
     p = sub.add_parser("preflight", help="whole-chain pass/fail")
+    p.add_argument("--publish", action="store_true",
+                   help="publish the verdict to /Vision/preflight for a dashboard")
+    p.add_argument("--interval", type=float, default=30.0,
+                   help="seconds between publishes; 0 publishes once and exits")
     p.set_defaults(fn=cmd_preflight)
 
     p = sub.add_parser("snapshot", help="capture or diff the configuration")

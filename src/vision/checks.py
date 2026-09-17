@@ -223,7 +223,77 @@ def calibration(cfg, cam, f):
     return finding(PASS, "calibration", "HFOV %.1f deg%s" % (hfov, at), name)
 
 
-# --- network, per camera --------------------------------------------------
+# --- network --------------------------------------------------------------
+
+def timesync(cfg, topics):
+    """Is the capture timestamp anchored to the roboRIO's clock?
+
+    The timestamp is what makes latency stop mattering: it records the moment
+    the shutter opened, so the pose estimator rewinds its odometry history to
+    that instant and fuses there. A number in the wrong timebase still fuses,
+    just at the wrong moment - the pose is correct and lands in the past. That
+    is invisible at rest and shows up as smear under motion, which reads as a
+    camera problem and is not one.
+
+    How the sync actually works, because it is the reverse of the obvious guess:
+
+    - **The roboRIO is the server and the Pi is the client.** Nothing on this
+      Pi turns it on. Robot code starts it, from `TimeSyncSingleton.load()`,
+      when it constructs a PhotonCamera.
+    - It is not NetworkTables. It is a separate protocol over UDP port 5810,
+      pinging at 1 Hz (measured) and taking the best round trip - Cristian's
+      algorithm.
+    - **The Pi applies the offset itself**, so what arrives on NetworkTables is
+      already in roboRIO time. photonlib only reads it out.
+
+    With no roboRIO nothing serves, so the client pings into the void. That is
+    the correct state on a bench and the reason this defaults to not required -
+    same shape as `detections`, which is also absent for good reasons until it
+    is not.
+
+    Limit worth knowing: pongs received proves it synced at some point, not
+    that it is synced *now*. The counts are cumulative and this is one sample,
+    so a link that died a moment ago still reports a healthy total. The live
+    signal is `timeSinceLastPong` in the result metadata, photonlib's to watch.
+    """
+    from . import nt
+    hosts = nt.parse_timesync(topics)
+    required = cfg.get("preflight", {}).get("require_timesync", False)
+
+    if not hosts:
+        return finding(SKIP, "timesync", "PhotonVision is publishing no %s topics "
+                       "- too old for the protocol, or not started" % nt.TIMESYNC)
+
+    host, st = sorted(hosts.items())[0]
+    tx, rx = st.get("ping_tx_count"), st.get("pong_rx_count")
+    if tx is None or rx is None:
+        missing = [k for k in ("ping_tx_count", "pong_rx_count") if st.get(k) is None]
+        return finding(SKIP, "timesync",
+                       "%s publishes no %s - saw %s. If PhotonVision renamed "
+                       "these, fix nt.TIMESYNC_KEYS"
+                       % (host, "/".join(missing), ", ".join(sorted(st)) or "nothing"))
+
+    if rx <= 0:
+        return finding(FAIL if required else SKIP, "timesync",
+                       "%s sent %d pings and heard no pongs - nothing is running "
+                       "a TimeSyncServer. Robot code starts one when it builds a "
+                       "PhotonCamera, so with no roboRIO this is expected"
+                       % (host, int(tx)))
+
+    off, rtt2 = st.get("offset_us"), st.get("rtt2_us")
+    if off is None:
+        return finding(SKIP, "timesync", "%s: %d/%d pongs but no offset published"
+                       % (host, int(rx), int(tx)))
+    # rtt2_us is the half round trip, which is the bound on how wrong the
+    # offset can be - the useful number, not the offset itself.
+    bound = "" if rtt2 is None else ", +/-%.0f us" % rtt2
+    return finding(PASS, "timesync", "%s synced to the roboRIO clock: offset "
+                   "%+.1f ms%s (%d/%d pongs)"
+                   % (host, off / 1000.0, bound, int(rx), int(tx)))
+
+
+# --- per camera, over the network ------------------------------------------
+
 
 def network(cfg, cameras):
     """Connects to NetworkTables, then asks per camera whether it is producing.
@@ -231,12 +301,15 @@ def network(cfg, cameras):
     The connection is global; the rate and the detections are not.
     """
     pf = cfg.get("preflight", {})
+    unchecked = "NetworkTables was not read"
     if not pf.get("require_nt", True):
-        return [finding(SKIP, "networktables", "not required by config")]
+        return [finding(SKIP, "networktables", "not required by config"),
+                finding(SKIP, "timesync", unchecked)]
     from . import nt
     inst, err = nt.connect(cfg.get("networktables"), pf.get("nt_timeout_s", 5.0))
     if inst is None or err:
-        return [finding(FAIL, "networktables", err or "no instance")]
+        return [finding(FAIL, "networktables", err or "no instance"),
+                finding(SKIP, "timesync", unchecked)]
     table = cfg.get("photonvision", {}).get("nt_table", "photonvision")
     published, topics = nt.watch(inst, table, seconds=1.5)
     live = {p: d for p, d in topics.items() if d["rate"] > 0}
@@ -251,6 +324,7 @@ def network(cfg, cameras):
         rows = [finding(FAIL, "networktables",
                         "connected but nothing is updating under /%s" % table)]
         published = []
+    rows.append(timesync(cfg, topics))
 
     for cam in cameras:
         name = cam["name"]

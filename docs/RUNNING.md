@@ -108,7 +108,7 @@ needs no parsing:
 | Topic | |
 |---|---|
 | `ready` | the go/no-go light — every check on every camera |
-| `power_ok`, `photonvision_ok`, `networktables_ok`, `configured_ok`, `distinct_devices_ok` | machine-wide checks |
+| `power_ok`, `photonvision_ok`, `networktables_ok`, `configured_ok`, `distinct_devices_ok`, `timesync_ok` | machine-wide checks |
 | `<camera>/format_ok`, `<camera>/identity_ok`, `<camera>/calibration_ok`, `<camera>/publishing_ok`, `<camera>/pipeline_fps_ok`, `<camera>/detections_ok` | one set per camera — **always all six**, whatever state the camera is in |
 | `failed`, `skipped`, `cameras` | counts |
 | `seq` | increments every run |
@@ -116,6 +116,17 @@ needs no parsing:
 
 Any NetworkTables dashboard can read these. With no roboRIO, point it at the
 Pi - PhotonVision runs the NT server. Green on `ready` means go.
+
+> **`timesync_ok` is about the roboRIO's clock, not the Pi's.** PhotonVision
+> stamps each capture at start of exposure and converts it into roboRIO time
+> before publishing, so the pose estimator can rewind odometry to the moment the
+> shutter opened. It learns the conversion from a time server that **robot code**
+> starts - the roboRIO is the server, this Pi is the client, over UDP 5810 and
+> not over NetworkTables. With no roboRIO nothing serves, so this reports SKIP
+> and publishes green; that is the correct bench state. Set
+> `preflight.require_timesync: true` once a roboRIO exists, because an unsynced
+> timestamp still fuses - it just lands in the wrong instant, which is invisible
+> at rest and looks like a camera fault under motion.
 
 > **If your dashboard colours booleans automatically, check the polarity.** The
 > `*_ok` topics here are true-is-good, but the health monitor's fault flags
@@ -135,7 +146,7 @@ at 320x200 - eighteen times the traffic for a picture a human glances at, and
 FRC has historically capped total bandwidth near 4 Mbps. Stream resolution does
 not affect detection; set it low on every camera.
 
-> **Every camera always publishes all seven of its checks**, even when it is
+> **Every camera always publishes all six of its checks**, even when it is
 > not publishing to PhotonVision at all. A conditional check produces a topic
 > that appears and disappears, and on a dashboard that is a widget vanishing at
 > the moment something breaks. A check that cannot run reports SKIP; it never

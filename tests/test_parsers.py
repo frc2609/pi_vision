@@ -19,7 +19,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from vision import camera, checks, field, tune, util                    # noqa: E402
+from vision import camera, checks, field, nt, tune, util                # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
@@ -405,6 +405,12 @@ class TestUniformChecks(unittest.TestCase):
             self.assertEqual(names, {"publishing", "pipeline_fps", "detections"},
                              "%s produced %s" % (cam, names))
 
+    def test_timesync_is_emitted_even_when_nothing_is_publishing(self):
+        # A global check that appears only on the happy path is a dashboard
+        # widget that vanishes exactly when something has gone wrong.
+        names = {r["name"] for r in self.rows_for([], {}) if r["camera"] is None}
+        self.assertIn("timesync", names)
+
     def test_a_camera_that_is_not_publishing_still_reports_all_three(self):
         rows = self.rows_for([], {})
         names = {r["name"] for r in rows if r["camera"] == "rear"}
@@ -412,6 +418,81 @@ class TestUniformChecks(unittest.TestCase):
         statuses = {r["name"]: r["status"] for r in rows if r["camera"] == "rear"}
         self.assertEqual(statuses["publishing"], checks.FAIL)
         self.assertEqual(statuses["pipeline_fps"], checks.SKIP)
+
+class TimeSync(unittest.TestCase):
+    """PhotonVision's clock sync to the roboRIO.
+
+    The roboRIO is the server; this Pi is the client. Robot code starts the
+    server, so on a bench with no roboRIO the client pings and hears nothing -
+    which is the correct state, not a fault, and must not read as one.
+    """
+
+    HOST = "raspberrypi"
+
+    def topics(self, **kv):
+        return {".timesync/%s/%s" % (self.HOST, k): {"rate": 1.0, "value": v}
+                for k, v in kv.items()}
+
+    def test_parses_values_and_ignores_camera_topics(self):
+        t = self.topics(offset_us=1234.0, ping_tx_count=10, pong_rx_count=9,
+                        rtt2_us=250.0)
+        t["front_left/fps"] = {"rate": 1.0, "value": 30.0}
+        got = nt.parse_timesync(t)
+        self.assertEqual(sorted(got), [self.HOST])
+        self.assertEqual(got[self.HOST]["pong_rx_count"], 9)
+        self.assertEqual(got[self.HOST]["offset_us"], 1234.0)
+
+    def test_string_values_survive_the_watch_snapshot(self):
+        # watch() stringifies every value, so the parser has to cope with that
+        # as well as with typed values.
+        got = nt.parse_timesync(self.topics(offset_us="1234.0", ping_tx_count="10",
+                                            pong_rx_count="9"))
+        self.assertEqual(got[self.HOST]["ping_tx_count"], 10.0)
+
+    def test_missing_key_is_absent_not_zero(self):
+        got = nt.parse_timesync(self.topics(ping_tx_count=10))
+        self.assertNotIn("pong_rx_count", got[self.HOST])
+
+    def test_no_timesync_topics_skips(self):
+        r = checks.timesync({}, {"front_left/fps": {"rate": 1.0, "value": 30.0}})
+        self.assertEqual(r["status"], checks.SKIP)
+
+    def test_a_wrong_key_name_says_so_instead_of_hiding(self):
+        # The first version of this check looked for `ping_rx_count`; the topic
+        # is `pong_rx_count`. It reported "incomplete statistics", which reads
+        # as PhotonVision's fault rather than ours.
+        r = checks.timesync({}, self.topics(ping_tx_count=10, offset_us=0))
+        self.assertEqual(r["status"], checks.SKIP)
+        self.assertIn("pong_rx_count", r["detail"])
+        self.assertIn("TIMESYNC_KEYS", r["detail"])
+
+    def test_the_state_actually_observed_on_the_bench(self):
+        # Captured from 2609-pi-1, 2026-08-30, no roboRIO present: pings
+        # climbing at 1 Hz, everything else flat at zero.
+        r = checks.timesync({}, self.topics(ping_tx_count=52718, pong_rx_count=0,
+                                            offset_us=0, pong_rx_time_us=0,
+                                            rtt2_us=0))
+        self.assertEqual(r["status"], checks.SKIP)
+        self.assertIn("52718", r["detail"])
+
+    def test_no_pongs_skips_when_not_required(self):
+        r = checks.timesync({}, self.topics(ping_tx_count=42, pong_rx_count=0))
+        self.assertEqual(r["status"], checks.SKIP)
+        self.assertIn("no roboRIO", r["detail"])
+
+    def test_no_pongs_fails_once_required(self):
+        cfg = {"preflight": {"require_timesync": True}}
+        r = checks.timesync(cfg, self.topics(ping_tx_count=42, pong_rx_count=0))
+        self.assertEqual(r["status"], checks.FAIL)
+
+    def test_synced_passes_and_reports_the_error_bound(self):
+        cfg = {"preflight": {"require_timesync": True}}
+        r = checks.timesync(cfg, self.topics(ping_tx_count=42, pong_rx_count=41,
+                                             offset_us=-2500.0, rtt2_us=180.0))
+        self.assertEqual(r["status"], checks.PASS)
+        self.assertIn("-2.5 ms", r["detail"])
+        self.assertIn("180", r["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

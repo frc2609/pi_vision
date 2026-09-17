@@ -90,15 +90,20 @@ photonvision:
   settings_dir: /opt/photonvision/photonvision_config
 
 networktables:
-  # With no roboRIO, enable "Run NetworkTables Server" in PhotonVision's
-  # settings and leave this as client_address pointing at localhost.
-  # Once a roboRIO exists it becomes the server: use client_team.
+  # The roboRIO is the server. Robot code starts one whenever it is running, so
+  # PhotonVision and these tools are both clients of it - "Run NetworkTables
+  # Server" in PhotonVision's settings must be OFF, or it publishes to itself
+  # and the roboRIO sees nothing.
+  #
+  # Before the roboRIO existed this was the other way round: PhotonVision ran
+  # the server and this said `client_address` / 127.0.0.1. If you go back to a
+  # bench with no roboRIO, that is the pair of changes to make.
   #   server         - this tool runs the server (rare; only if nothing else does)
   #   client_team    - resolve the server from the team number
   #   client_address - connect to a fixed address
-  mode: client_address
+  mode: client_team
   team: 2609
-  address: 127.0.0.1
+  address: 127.0.0.1        # only read when mode is client_address
   identity: camera_tools
 
 preflight:
@@ -110,6 +115,14 @@ preflight:
   # anywhere, just hasTarget going false. Set true when a tag is permanently in
   # view - on a robot at an event, it should be true.
   require_detections: false
+  # Whether PhotonVision must be synced to the roboRIO's clock. The roboRIO is
+  # the time server and this Pi is the client - robot code starts the server
+  # when it constructs a PhotonCamera, and nothing on the Pi enables it. So
+  # with no roboRIO there is nothing to sync to. True since 2026-09-17, when a
+  # roboRIO arrived and this went green: an unsynced timestamp still fuses, just
+  # at the wrong instant, which is invisible at rest and looks like a camera
+  # fault under motion. Set it back to false only on a bench with no roboRIO.
+  require_timesync: true
   # Nothing is broken at a low framerate, but it is worth saying. Framerate here
   # is set by exposure and exposure is set by the light: 12 fps at night, 31 in
   # daylight, 42 with detection lost entirely.

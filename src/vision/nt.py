@@ -36,6 +36,19 @@ INTERESTING = RESULT_TOPICS + (
 PIPELINE_REQUEST = "pipelineIndexRequest"
 PIPELINE_STATE = "pipelineIndexState"
 
+# Time synchronisation. PhotonVision publishes its own sync health under a
+# dot-prefixed subtable, one per coprocessor hostname: dashboards hide names
+# beginning with a dot, but it is an ordinary topic and a prefix subscription
+# receives it like any other.
+#
+# The key names are MEASURED from a running instance, not taken from the
+# protocol document - the counters are ping_tx / pong_rx, which is easy to read
+# as ping_tx / ping_rx and get wrong. A wrong name here is silent: the subtable
+# parses, the key is simply absent.
+TIMESYNC = ".timesync"
+TIMESYNC_KEYS = ("offset_us", "ping_tx_count", "pong_rx_count",
+                 "pong_rx_time_us", "rtt2_us")
+
 
 def connect(nt_cfg, timeout=5.0):
     """Bring up an NT client (or server) per config. Returns (inst, error).
@@ -149,6 +162,28 @@ def cameras(paths, prefix):
             if head and not head.startswith("."):
                 out.add(head)
     return sorted(out)
+
+
+def parse_timesync(topics):
+    """Pull PhotonVision's time-sync statistics out of a watch() result.
+
+    Returns {hostname: {key: number}}, one entry per coprocessor - in practice
+    one. A key absent from the topic set is absent here rather than zero,
+    because "never published" and "zero pongs" are different answers and only
+    the second one means something is wrong.
+    """
+    out = {}
+    for rel, d in (topics or {}).items():
+        parts = rel.split("/")
+        if len(parts) != 3 or parts[0] != TIMESYNC or parts[2] not in TIMESYNC_KEYS:
+            continue
+        raw = d.get("value") if isinstance(d, dict) else d
+        try:
+            n = float(raw)
+        except (TypeError, ValueError):
+            continue
+        out.setdefault(parts[1], {})[parts[2]] = n
+    return out
 
 
 def watch(inst, table, seconds, poll=0.02):

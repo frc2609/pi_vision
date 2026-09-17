@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# vd - vision diagnostics. Runs src/vd.py against this repo's venv.
+#
+# The venv exists for exactly one reason: pyntcore is pip-only. Its python is
+# deliberately NOT on PATH and must not be put there - the apt OpenCV with
+# contrib has to stay the one that wins - so this names the interpreter
+# explicitly instead of relying on a shell someone remembered to activate.
+#
+# Resolves its own symlink, so it works from any directory and can be linked
+# onto PATH:
+#
+#     chmod +x vd
+#     ln -s "$PWD/vd" ~/.local/bin/vd
+#
+set -euo pipefail
+
+self=${BASH_SOURCE[0]}
+# readlink -f is GNU; on the Pi that is what we have. Kept simple on purpose.
+here=$(cd "$(dirname "$(readlink -f "$self")")" && pwd)
+
+py="$here/.venv/bin/python"
+if [ ! -x "$py" ]; then
+    echo "vd: no interpreter at $py" >&2
+    echo "    The venv is required for pyntcore. See docs/RUNNING.md." >&2
+    exit 127
+fi
+
+exec "$py" "$here/src/vd.py" "$@"

@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 from vision import camera, nt, util                                     # noqa: E402
 
 DEVICES = "/dev/v4l/by-path/*usb*-video-index0"    # index0 is capture, index1 metadata
-PORT = re.compile(r"xhci-hcd\.(\d+)-usb-0:([\d.]+):")
+PORT = re.compile(r"xhci-hcd\.(\d+)-usb(?:v\d)?-0:([\d.]+):")
 PMIC = re.compile(r"\s*(\S+?)_(A|V)\s+(?:current|volt)\(\d+\)=([0-9.]+)[AV]")
 # A camera that cannot get USB bandwidth fails in the kernel log and nowhere
 # else - uvcvideo reports "No space left on device" (-28) and PhotonVision just
@@ -60,8 +60,19 @@ EXPOSURE_BOUND = 0.85       # framerate within 15% of what exposure allows
 # --- sampling -------------------------------------------------------------
 
 def devices():
-    """Connected USB capture devices, {by-path link: /dev/videoN}."""
-    return {link: os.path.realpath(link) for link in sorted(glob.glob(DEVICES))}
+    """Connected USB capture devices, {by-path link: /dev/videoN}, one per camera.
+
+    udev can publish two by-path names for one device - `usb-0:1:1.0` and a
+    newer `usbv2-0:1:1.0` carrying the USB revision - so counting links counted
+    every camera twice. De-duplicated on the device node; the plain `usb-` name
+    wins because it is the form config.yaml uses.
+    """
+    by_dev = {}
+    for link in sorted(glob.glob(DEVICES)):
+        dev = os.path.realpath(link)
+        if dev not in by_dev or "-usb-" in link:
+            by_dev[dev] = link
+    return {link: dev for dev, link in by_dev.items()}
 
 
 def port(link):

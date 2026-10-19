@@ -85,7 +85,7 @@ Exit code is the number of failed checks.
 | `power` | Anything but `0x0` means undervoltage or throttling occurred **since the last full power cycle**. Sticky bits do not clear on a soft reboot, so a fault here may be history rather than now — the monitor's `*_since_start` fields separate those. |
 | `format` | Negotiated width, height and pixel format against `expect`. A mismatch usually means something reopened the camera at its own default — PhotonVision opens new cameras at 320x240 YUYV. |
 | `controls` | **Expected to fail while PhotonVision is running.** It sets its own exposure when it opens the camera, and it wins. Informational unless PhotonVision is stopped. |
-| `calibration` | Derives HFOV from `fx`. A negative or zero `fx` is a diverged solve, not a bad calibration — see [photonvision_calibration.md](../../docs/photonvision_calibration.md). |
+| `calibration` | Derives HFOV from `fx`. A negative or zero `fx` is a diverged solve, not a bad calibration — see [CALIBRATION.md](CALIBRATION.md). |
 | `photonvision` | Service state only. Says nothing about whether detection works — that is `vd nt`. |
 | `networktables` | Connects and checks something is actually updating. |
 

@@ -3,12 +3,6 @@
 Camera-side tooling for the vision coprocessor: diagnostics at every layer,
 calibration artefacts, and PhotonVision configuration.
 
-> **No remote yet.** The [operating standards](../docs/operating_standards.md)
-> say each component under `vision/` gets its own repository *and its own
-> GitHub remote*. This is a local git repo — `camera/` is gitignored by the
-> `vision/` repo so its contents stay out of that history — but **until a remote
-> exists, one dead SD card or laptop still loses everything.**
-
 ## The idea
 
 Every layer of the system should be able to say where a problem is. The health
@@ -26,10 +20,15 @@ monitor covers the Pi. These cover everything above it:
 Every command is config-driven, exits non-zero on trouble, and fails soft: a probe
 that cannot run reports `--` and says why, rather than raising.
 
-**[`docs/RUNNING.md`](docs/RUNNING.md) is the one to read** — how to run each
-tool and, more importantly, how to read what it prints. Several of the outputs
-are easy to misread in ways that send you looking in the wrong place, and it
-says which.
+## The documentation
+
+| Read this | When |
+|---|---|
+| [`docs/RUNNING.md`](docs/RUNNING.md) | Running the tools, and — more importantly — how to read what they print. Several outputs are easy to misread in ways that send you looking in the wrong place, and it says which. |
+| [`docs/PHOTONVISION.md`](docs/PHOTONVISION.md) | Setting up or tuning PhotonVision: resolution, exposure, framerate, streams. |
+| [`docs/CALIBRATION.md`](docs/CALIBRATION.md) | Calibrating a camera. Read it **before** the first attempt — the default field-of-view setting seeds the solver and will make it fail. |
+| [`docs/NETWORKING.md`](docs/NETWORKING.md) | Connecting the Pi to the robot: who serves NetworkTables, and clock synchronisation. |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Something is broken. Start with "First checks". Add an entry when you lose more than fifteen minutes. |
 
 ## Layout
 
@@ -42,7 +41,11 @@ camera/
 │   ├── field_layout_corner.json  two-tag mini-field for multi-tag testing
 │   └── photonvision-calibration-*.json
 ├── docs/
-│   └── RUNNING.md                how to run vd and read its output
+│   ├── RUNNING.md                how to run vd and read its output
+│   ├── PHOTONVISION.md           setting up and tuning PhotonVision
+│   ├── CALIBRATION.md            calibrating a camera, step by step
+│   ├── NETWORKING.md             Pi to roboRIO, NetworkTables, clock sync
+│   └── TROUBLESHOOTING.md        log of problems actually hit - append to it
 ├── scripts/
 │   └── install_service.sh        idempotent installer for the settings unit
 ├── services/
@@ -89,13 +92,26 @@ python3 -m venv --system-site-packages .venv   # so apt's OpenCV stays visible
 .venv/bin/pip install -r requirements.txt
 ```
 
-**OpenCV must come from apt.** The apt build includes contrib, and `cv2.aruco`
-lives in contrib. See [operating standards §4](../docs/operating_standards.md).
+**Then use `./vd`, not `python3 src/vd.py`.** The wrapper picks the venv's
+interpreter itself, because forgetting to activate the venv gives a
+`ModuleNotFoundError: ntcore` that points nowhere near the cause. To get `vd`
+from anywhere:
+
+```bash
+chmod +x vd
+mkdir -p ~/.local/bin && ln -sf "$PWD/vd" ~/.local/bin/vd
+```
+
+**OpenCV must come from apt, never pip.** The apt build includes contrib, and
+`cv2.aruco` — needed for ChArUco calibration — lives in contrib. PyPI's
+`opencv-python` does not have it, and the resulting `AttributeError` does not
+point at the cause. The venv is created with `--system-site-packages` precisely
+so apt's build stays visible; never let pip install an OpenCV on top of it.
 
 ## `vd preflight` — start here
 
 ```bash
-python3 src/vd.py preflight; echo "exit $?"
+./vd preflight; echo "exit $?"
 ```
 
 Checks power, camera presence and format, v4l2 controls, calibration, the
@@ -218,8 +234,8 @@ Findings from stages 1–5 and 10, recorded so nobody re-derives them:
   sensor, fixed lens, no focus motor. `config.yaml` lists them under
   `phantom_controls`.
 - **Robot-speed detection needs ~1.4–2.8 ms of exposure**; one overhead LED in a
-  room floors out at 8–12 ms. See [the roadmap](../docs/learning_roadmap.md)
-  stage 2.
+  room floors out at 8–12 ms. That is a 4–9x light deficit and it is not a
+  tuning problem — see [PHOTONVISION.md](docs/PHOTONVISION.md).
 
 ## What still belongs here
 
